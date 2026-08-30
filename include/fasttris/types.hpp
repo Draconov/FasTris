@@ -46,7 +46,6 @@ struct Handling {
     bool ihs{true};
 };
 
-inline constexpr int kSimulationRulesVersion = 2;
 
 struct Rules {
     Handling handling{};
@@ -56,9 +55,6 @@ struct Rules {
     int garbage_cap{8};
     int garbage_delay_ms{500};
     int garbage_messiness_pct{25};
-
-    // Stored in replays so deterministic rules can evolve without breaking old runs.
-    int simulation_version{kSimulationRulesVersion};
 
     // Custom / Sandbox mode only. Zero means disabled/endless.
     int custom_gravity_ms{1000};

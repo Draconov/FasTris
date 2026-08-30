@@ -62,7 +62,6 @@ private:
     void seedStartingGarbage(int lines);
     void checkModeCompletion();
     int estimatedOptimalFinesseInputs() const;
-    int estimatedOptimalFinesseInputsLegacy() const;
 
     std::uint64_t seed_{};
     Mode mode_{};

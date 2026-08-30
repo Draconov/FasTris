@@ -8,7 +8,6 @@ Example:
 FASTTRIS_REPLAY 1
 seed 12345
 mode 0
-simver 2
 das 140
 arr 25
 ...
@@ -23,12 +22,8 @@ hash <sha256>
 
 Times are integer microseconds from the start of the simulated run, excluding paused wall-clock time.
 
-`simver` identifies the deterministic gameplay-rules revision. It is separate from both the application `VERSION` and the replay-file syntax version. This lets scoring, finesse, or mode semantics improve while old recorded runs can still be replayed with their original deterministic behavior.
-
-Replays written before `simver` existed are treated as simulation rules version 1. New runs use the current simulation rules version.
+FasTris intentionally supports only the current replay layout. The loader requires the current field set and rejects missing or unknown fields instead of maintaining legacy replay behavior.
 
 Custom-mode settings are stored in the replay as well, including gravity, line goal, time limit, and starting garbage.
 
-The final hash is SHA-256 over a canonical deterministic-state serialization. A verifier rebuilds the run from the replay and compares the hash.
-
-A future incompatible change to the replay file syntax itself should create replay format v2 rather than reusing the v1 header.
+The final hash is SHA-256 over the current canonical deterministic-state serialization. A verifier rebuilds the run from the replay and compares the hash.

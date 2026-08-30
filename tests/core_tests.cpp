@@ -58,7 +58,16 @@ static void test_replay() {
     r.duration_us=100000;
     Game g(r.seed,r.mode,r.rules);for(auto&e:r.events){g.advanceTo(e.time_us);if(e.down)g.press(e.action);else g.release(e.action);}g.advanceTo(r.duration_us);r.final_hash=stateHash(g);
     assert(verifyReplay(r));
-    auto path=(std::filesystem::temp_directory_path()/"fasttris_test.ftr").string();std::string err;assert(saveReplay(r,path,&err));Replay x;assert(loadReplay(path,x,&err));assert(verifyReplay(x));std::filesystem::remove(path);
+    auto path=(std::filesystem::temp_directory_path()/"fasttris_test.ftr").string();
+    std::string err;
+    assert(saveReplay(r,path,&err));
+    {
+        std::ifstream saved(path,std::ios::binary);
+        std::string text((std::istreambuf_iterator<char>(saved)),std::istreambuf_iterator<char>());
+        assert(text.find("FASTTRIS_REPLAY 1\n")!=std::string::npos);
+        assert(text.find("seed 778899\n")!=std::string::npos);
+    }
+    Replay x;assert(loadReplay(path,x,&err));assert(verifyReplay(x));std::filesystem::remove(path);
 }
 static void test_sha() { assert(sha256("abc")=="ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"); }
 
@@ -162,18 +171,16 @@ static void test_zero_arr_preserves_charge_across_spawn() {
 
 
 static void test_modern_scoring() {
-    auto pc_quad=scoreClear(ClearKind::Quad,0,false,true,1,kSimulationRulesVersion);
+    auto pc_quad=scoreClear(ClearKind::Quad,0,false,true,1);
     assert(pc_quad.points==2800); // 800 Quad + 2000 Perfect Clear.
     assert(pc_quad.attack==14);
 
-    auto b2b_pc_quad=scoreClear(ClearKind::Quad,0,true,true,1,kSimulationRulesVersion);
+    auto b2b_pc_quad=scoreClear(ClearKind::Quad,0,true,true,1);
     assert(b2b_pc_quad.points==4400); // 1200 B2B Quad + 3200 B2B Quad PC bonus.
 
-    auto combo=scoreClear(ClearKind::Single,4,false,false,2,kSimulationRulesVersion);
+    auto combo=scoreClear(ClearKind::Single,4,false,false,2);
     assert(combo.points==600); // (100 + 4*50) * level 2.
 
-    auto legacy=scoreClear(ClearKind::Single,0,false,true,1,1);
-    assert(legacy.points==3600); // Preserve original replay scoring when simver=1.
 }
 
 static void test_finesse_tracking() {
@@ -254,36 +261,23 @@ static void test_mode_basics() {
     assert(cheese_rows==10);
 }
 
-static void test_legacy_replay_without_simver() {
-    Rules rules;
-    rules.simulation_version=1;
-    rules.handling.das_ms=100;
-    rules.handling.arr_ms=0;
-    Replay r;
-    r.seed=8080;
-    r.mode=Mode::Sprint40;
-    r.rules=rules;
-    r.events={{1000,Action::RotateCW,true},{1001,Action::RotateCW,false},{2000,Action::HardDrop,true}};
-    r.duration_us=5000;
-    Game g(r.seed,r.mode,r.rules);
-    for(auto&e:r.events){g.advanceTo(e.time_us);if(e.down)g.press(e.action);else g.release(e.action);}
-    g.advanceTo(r.duration_us);
-    r.final_hash=stateHash(g);
+static void test_replay_parser_requires_current_layout() {
+    auto write_and_reject=[](const std::string& name,const std::string& body){
+        auto path=(std::filesystem::temp_directory_path()/name).string();
+        std::ofstream out(path,std::ios::binary);
+        out<<body;
+        out.close();
+        Replay loaded;
+        std::string err;
+        assert(!loadReplay(path,loaded,&err));
+        assert(!err.empty());
+        std::filesystem::remove(path);
+    };
 
-    auto path=(std::filesystem::temp_directory_path()/"fastris_legacy_replay.ftr").string();
-    std::ofstream out(path,std::ios::binary);
-    out<<"FASTTRIS_REPLAY 1\nseed "<<r.seed<<"\nmode "<<static_cast<int>(r.mode)<<"\n"
-       <<"das 100\narr 0\nsdf 20\ndcd 0\nlock 500\nresets 15\nrot180 1\nirs 1\nihs 1\nghost 1\nnext 5\ntournament 0\ngcap 8\ngdelay 500\ngmess 25\n";
-    for(auto&e:r.events)out<<"event "<<e.time_us<<' '<<actionToken(e.action)<<' '<<(e.down?1:0)<<"\n";
-    out<<"duration "<<r.duration_us<<"\nhash "<<r.final_hash<<"\n";
-    out.close();
-
-    Replay loaded;
-    std::string err;
-    assert(loadReplay(path,loaded,&err));
-    assert(loaded.rules.simulation_version==1);
-    assert(verifyReplay(loaded));
-    std::filesystem::remove(path);
+    write_and_reject("fastris_replay_incomplete.ftr",
+        "FASTTRIS_REPLAY 1\nseed 8080\nmode 0\nduration 0\nhash deadbeef\n");
+    write_and_reject("fastris_replay_unknown_field.ftr",
+        "FASTTRIS_REPLAY 1\nseed 8080\nmode 0\nobsolete 1\nduration 0\nhash deadbeef\n");
 }
 
 static void test_battle_smoke() {
@@ -291,6 +285,6 @@ static void test_battle_smoke() {
 }
 
 int main(){
-    test_rng_and_bag();test_shapes();test_board();test_game_determinism();test_seed_difference();test_replay();test_sha();test_irs_ihs();test_replay_fuzz();test_default_horizontal_handling();test_zero_arr_remains_expert_instant_shift();test_zero_arr_preserves_charge_across_spawn();test_modern_scoring();test_finesse_tracking();test_custom_mode_rules();test_mode_basics();test_legacy_replay_without_simver();test_battle_smoke();
+    test_rng_and_bag();test_shapes();test_board();test_game_determinism();test_seed_difference();test_replay();test_sha();test_irs_ihs();test_replay_fuzz();test_default_horizontal_handling();test_zero_arr_remains_expert_instant_shift();test_zero_arr_preserves_charge_across_spawn();test_modern_scoring();test_finesse_tracking();test_custom_mode_rules();test_mode_basics();test_replay_parser_requires_current_layout();test_battle_smoke();
     std::cout<<"FasTris core tests: PASS\n";
 }

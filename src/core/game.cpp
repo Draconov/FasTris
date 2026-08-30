@@ -76,7 +76,7 @@ void Game::spawn(Piece forced) {
     last_action_rotation_=false;last_kick_index_=-1;piece_input_count_=0;piece_spawn_x_=active_.x;piece_spawn_rot_=active_.rot;
     if(board_.collides(active_)){game_over_=true;active_.piece=Piece::None;next_gravity_us_=kNever;return;}
     if(rules_.handling.irs){
-        auto irsRotate=[&](int delta){if(rules_.simulation_version>1)++piece_input_count_;tryRotate(delta);};
+        auto irsRotate=[&](int delta){++piece_input_count_;tryRotate(delta);};
         if(rot180_held_ && rules_.handling.allow_180)irsRotate(2);
         else if(cw_held_)irsRotate(1);
         else if(ccw_held_)irsRotate(-1);
@@ -118,7 +118,7 @@ bool Game::tryRotate(int delta){
     if(delta==2&&!rules_.handling.allow_180) return false;
     auto from=active_.rot,to=rotated(from,delta);auto tests=(std::abs(delta)==2)?kickTests180(active_.piece,from):kickTests(active_.piece,from,to);
     int idx=0;for(auto k:tests){auto t=active_;t.rot=to;t.x+=k.x;t.y+=k.y;if(!board_.collides(t)){
-        active_=t;last_action_rotation_=true;last_kick_index_=idx;if(rules_.simulation_version<=1)++piece_input_count_;++stats_.rotations;refreshGrounded(true);return true;}++idx;}
+        active_=t;last_action_rotation_=true;last_kick_index_=idx;++stats_.rotations;refreshGrounded(true);return true;}++idx;}
     return false;
 }
 
@@ -158,7 +158,7 @@ Spin Game::detectTSpin() const {
 }
 ClearKind Game::classifyClear(Spin s,int n) const {
     if(s==Spin::Full){if(n==0)return ClearKind::TSpinNoLine;if(n==1)return ClearKind::TSpinSingle;if(n==2)return ClearKind::TSpinDouble;return ClearKind::TSpinTriple;}
-    if(s==Spin::Mini){if(n==0)return ClearKind::MiniNoLine;if(n==1||rules_.simulation_version<=1)return ClearKind::MiniSingle;return ClearKind::MiniDouble;}
+    if(s==Spin::Mini){if(n==0)return ClearKind::MiniNoLine;if(n==1)return ClearKind::MiniSingle;return ClearKind::MiniDouble;}
     if(n==1) return ClearKind::Single;
     if(n==2) return ClearKind::Double;
     if(n==3) return ClearKind::Triple;
@@ -166,18 +166,7 @@ ClearKind Game::classifyClear(Spin s,int n) const {
     return ClearKind::None;
 }
 
-int Game::estimatedOptimalFinesseInputsLegacy() const {
-    int horizontal=(active_.x==piece_spawn_x_)?0:1;
-    int rd=(static_cast<int>(active_.rot)-static_cast<int>(piece_spawn_rot_)+4)%4;
-    int rotation=0;
-    if(rd==1||rd==3)rotation=1;
-    else if(rd==2)rotation=rules_.handling.allow_180?1:2;
-    return horizontal+rotation;
-}
-
 int Game::estimatedOptimalFinesseInputs() const {
-    if(rules_.simulation_version<=1) return estimatedOptimalFinesseInputsLegacy();
-
     // Standard finesse is about the minimum horizontal/rotation inputs required
     // to reach an orientation and column. Evaluate that on an empty field so
     // stack-specific kicks do not incorrectly punish advanced placements.
@@ -242,7 +231,7 @@ void Game::lockPiece(){
     board_.stamp(active_);auto cr=board_.clearFullLines();bool pc=cr.lines>0&&board_.perfectClear();last_clear_=classifyClear(spin,cr.lines);
     if(cr.lines>0){++stats_.combo;stats_.max_combo=std::max(stats_.max_combo,stats_.combo);}else stats_.combo=-1;
     bool difficult=(last_clear_==ClearKind::Quad||last_clear_==ClearKind::MiniSingle||last_clear_==ClearKind::MiniDouble||last_clear_==ClearKind::TSpinSingle||last_clear_==ClearKind::TSpinDouble||last_clear_==ClearKind::TSpinTriple);
-    bool had_b2b=stats_.b2b_chain>0;auto sr=scoreClear(last_clear_,stats_.combo,had_b2b,pc,level(),rules_.simulation_version);stats_.score+=sr.points;
+    bool had_b2b=stats_.b2b_chain>0;auto sr=scoreClear(last_clear_,stats_.combo,had_b2b,pc,level());stats_.score+=sr.points;
     if(cr.lines>0){if(difficult){++stats_.b2b_chain;stats_.max_b2b=std::max(stats_.max_b2b,stats_.b2b_chain);}else stats_.b2b_chain=0;}
     stats_.lines+=cr.lines;stats_.garbage_lines_cleared+=cr.garbage_lines;stats_.attacks+=sr.attack;
     if(last_clear_==ClearKind::Quad) ++stats_.quads;
@@ -284,13 +273,13 @@ int Game::consumeOutgoingAttack(){int n=outgoing_attack_;outgoing_attack_=0;retu
 void Game::setHorizontal(int dir,bool down){
     bool& held=(dir<0)?left_held_:right_held_;if(held==down)return;held=down;
     if(down){
-        if(rules_.simulation_version>1)++piece_input_count_;
-        bool switching=(horiz_dir_!=0&&horiz_dir_!=dir);horiz_dir_=dir;tryMove(dir,0,true,rules_.simulation_version<=1);
+        ++piece_input_count_;
+        bool switching=(horiz_dir_!=0&&horiz_dir_!=dir);horiz_dir_=dir;tryMove(dir,0,true,false);
         TimeUs charge=ms(std::max(0,rules_.handling.das_ms));if(switching)charge=std::max<TimeUs>(0,charge-ms(std::max(0,rules_.handling.dcd_ms)));
         next_horizontal_us_=now_us_+charge;
     }else if(horiz_dir_==dir){
         int other=(dir<0?(right_held_?1:0):(left_held_?-1:0));horiz_dir_=other;
-        if(other!=0){tryMove(other,0,true,rules_.simulation_version<=1);next_horizontal_us_=now_us_+std::max<TimeUs>(0,ms(std::max(0,rules_.handling.das_ms))-ms(std::max(0,rules_.handling.dcd_ms)));}
+        if(other!=0){tryMove(other,0,true,false);next_horizontal_us_=now_us_+std::max<TimeUs>(0,ms(std::max(0,rules_.handling.das_ms))-ms(std::max(0,rules_.handling.dcd_ms)));}
         else next_horizontal_us_=kNever;
     }
 }
@@ -307,9 +296,9 @@ void Game::press(Action a){
         case Action::Left:setHorizontal(-1,true);break;case Action::Right:setHorizontal(1,true);break;
         case Action::SoftDrop:if(!soft_held_){soft_held_=true;if(rules_.handling.sdf<=0)softSonicDrop();scheduleGravityFromNow();}break;
         case Action::HardDrop:hardDrop();break;
-        case Action::RotateCW:if(!cw_held_){cw_held_=true;if(rules_.simulation_version>1)++piece_input_count_;tryRotate(1);}break;
-        case Action::RotateCCW:if(!ccw_held_){ccw_held_=true;if(rules_.simulation_version>1)++piece_input_count_;tryRotate(-1);}break;
-        case Action::Rotate180:if(rules_.handling.allow_180&&!rot180_held_){rot180_held_=true;if(rules_.simulation_version>1)++piece_input_count_;tryRotate(2);}break;
+        case Action::RotateCW:if(!cw_held_){cw_held_=true;++piece_input_count_;tryRotate(1);}break;
+        case Action::RotateCCW:if(!ccw_held_){ccw_held_=true;++piece_input_count_;tryRotate(-1);}break;
+        case Action::Rotate180:if(rules_.handling.allow_180&&!rot180_held_){rot180_held_=true;++piece_input_count_;tryRotate(2);}break;
         case Action::Hold:hold_held_=true;doHold();break;default:break;
     }
 }
@@ -351,17 +340,10 @@ void Game::advanceTo(TimeUs target){
 
 std::string Game::deterministicState() const {
     std::ostringstream o;
-    if(rules_.simulation_version<=1){
-        o<<"fasttris-state-v1\n"<<seed_<<' '<<static_cast<int>(mode_)<<' '<<now_us_<<' '<<game_over_<<' '<<complete_<<'\n';
-        for(int y=0;y<kBoardH;++y){o<<board_.rowMask(y)<<',';for(int x=0;x<kBoardW;++x)o<<static_cast<int>(board_.cell(x,y));o<<'\n';}
-        o<<static_cast<int>(active_.piece)<<' '<<static_cast<int>(active_.rot)<<' '<<active_.x<<' '<<active_.y<<' '<<static_cast<int>(hold_)<<'\n';
-        o<<stats_.score<<' '<<stats_.lines<<' '<<stats_.pieces<<' '<<stats_.attacks<<' '<<stats_.inputs<<' '<<stats_.holds<<' '<<stats_.rotations<<' '<<stats_.quads<<' '<<stats_.tspins<<' '<<stats_.perfect_clears<<' '<<stats_.combo<<' '<<stats_.b2b_chain<<' '<<stats_.finesse_faults<<'\n';
-    }else{
-        o<<"fasttris-state-v2\n"<<rules_.simulation_version<<' '<<seed_<<' '<<static_cast<int>(mode_)<<' '<<now_us_<<' '<<game_over_<<' '<<complete_<<'\n';
-        for(int y=0;y<kBoardH;++y){o<<board_.rowMask(y)<<',';for(int x=0;x<kBoardW;++x)o<<static_cast<int>(board_.cell(x,y));o<<'\n';}
-        o<<static_cast<int>(active_.piece)<<' '<<static_cast<int>(active_.rot)<<' '<<active_.x<<' '<<active_.y<<' '<<static_cast<int>(hold_)<<' '<<hold_used_<<'\n';
-        o<<stats_.score<<' '<<stats_.lines<<' '<<stats_.pieces<<' '<<stats_.attacks<<' '<<stats_.inputs<<' '<<stats_.holds<<' '<<stats_.rotations<<' '<<stats_.hard_drops<<' '<<stats_.soft_drop_cells<<' '<<stats_.quads<<' '<<stats_.tspins<<' '<<stats_.perfect_clears<<' '<<stats_.combo<<' '<<stats_.max_combo<<' '<<stats_.b2b_chain<<' '<<stats_.max_b2b<<' '<<stats_.finesse_faults<<' '<<stats_.finesse_perfect_pieces<<' '<<stats_.finesse_streak<<' '<<stats_.max_finesse_streak<<' '<<stats_.garbage_lines_cleared<<'\n';
-    }
+    o<<"fastris-state\n"<<seed_<<' '<<static_cast<int>(mode_)<<' '<<now_us_<<' '<<game_over_<<' '<<complete_<<'\n';
+    for(int y=0;y<kBoardH;++y){o<<board_.rowMask(y)<<',';for(int x=0;x<kBoardW;++x)o<<static_cast<int>(board_.cell(x,y));o<<'\n';}
+    o<<static_cast<int>(active_.piece)<<' '<<static_cast<int>(active_.rot)<<' '<<active_.x<<' '<<active_.y<<' '<<static_cast<int>(hold_)<<' '<<hold_used_<<'\n';
+    o<<stats_.score<<' '<<stats_.lines<<' '<<stats_.pieces<<' '<<stats_.attacks<<' '<<stats_.inputs<<' '<<stats_.holds<<' '<<stats_.rotations<<' '<<stats_.hard_drops<<' '<<stats_.soft_drop_cells<<' '<<stats_.quads<<' '<<stats_.tspins<<' '<<stats_.perfect_clears<<' '<<stats_.combo<<' '<<stats_.max_combo<<' '<<stats_.b2b_chain<<' '<<stats_.max_b2b<<' '<<stats_.finesse_faults<<' '<<stats_.finesse_perfect_pieces<<' '<<stats_.finesse_streak<<' '<<stats_.max_finesse_streak<<' '<<stats_.garbage_lines_cleared<<'\n';
     auto q=bag_.queue();int n=0;for(auto p:q){o<<static_cast<int>(p)<<',';if(++n==14)break;}o<<'\n'<<bag_.rngState()<<'\n';return o.str();
 }
 

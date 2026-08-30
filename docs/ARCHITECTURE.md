@@ -19,7 +19,7 @@ Piece generation uses PCG32 through `Bag7`.
 
 Garbage uses a separately seeded PCG32 stream. Cosmetic systems should use another RNG and must never consume gameplay RNG values.
 
-Seed derivation is versioned. If a future release changes a randomizer algorithm, introduce a new replay/randomizer version instead of silently changing existing seeds. Gameplay rule changes use the replay `simver` field so old runs can retain their original deterministic scoring and finesse behavior.
+Piece and garbage generation are deterministic from the stored seed and rules. The replay loader intentionally accepts only the current replay layout: missing or unknown fields are rejected. Gameplay or RNG changes do not retain legacy engine paths; replays from older layouts are simply unsupported.
 
 ## Timing
 
