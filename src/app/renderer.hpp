@@ -35,12 +35,20 @@ enum SettingsItem : int {
     SettingVsync,
     SettingFpsCap,
     SettingTournament,
-    SettingSeed,
-    SettingRandomSeed,
+    SettingSeedMenu,
     SettingControls,
     SettingMiscellaneous,
     SettingReset,
     SettingCount
+};
+
+enum SeedSettingsItem : int {
+    SeedSettingValue = 0,
+    SeedSettingRandomize,
+    SeedSettingCopy,
+    SeedSettingPaste,
+    SeedSettingBack,
+    SeedSettingCount
 };
 
 inline constexpr int kControlResetIndex = static_cast<int>(Action::Count);
@@ -49,8 +57,10 @@ inline constexpr int kControlItemCount = kControlResetIndex + 1;
 void renderGame(SDL_Renderer* r, Game& g, const RenderInfo& info);
 void renderMenu(SDL_Renderer* r, int selected, bool tournament);
 void renderReplayMenu(SDL_Renderer* r, int selected, bool has_last_replay, const std::string& status);
-void renderSettings(SDL_Renderer* r, const AppConfig& cfg, std::uint64_t seed, int selected,
+void renderSettings(SDL_Renderer* r, const AppConfig& cfg, int selected,
                     bool numeric_editing, const std::string& numeric_text, const std::string& status);
+void renderSeedSettings(SDL_Renderer* r, std::uint64_t seed, int selected,
+                        bool numeric_editing, const std::string& numeric_text, const std::string& status);
 void renderSandboxSetup(SDL_Renderer* r, const AppConfig& cfg, int selected);
 void renderControls(SDL_Renderer* r, const AppConfig& cfg, int selected, bool rebinding, bool waiting_pad);
 void renderMiscellaneous(SDL_Renderer* r);

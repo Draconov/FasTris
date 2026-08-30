@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <cstdarg>
 #include <array>
+#include <cctype>
 #include <cmath>
 #include <cstdio>
 #include <iomanip>
@@ -240,7 +241,7 @@ void renderReplayMenu(SDL_Renderer*r,int sel,bool hasLast,const std::string&stat
     txt(r,250,610,"UP/DOWN select   ENTER open   ESC back",{135,145,160,255});
 }
 
-void renderSettings(SDL_Renderer*r,const AppConfig&c,std::uint64_t seed,int sel,bool editing,const std::string&editText,const std::string&status){
+void renderSettings(SDL_Renderer*r,const AppConfig&c,int sel,bool editing,const std::string&editText,const std::string&status){
     beginCanvas(r,true);
     set(r,{11,14,20,255});SDL_RenderClear(r);
     txt(r,330,18,"SETTINGS",{235,240,248,255},true);
@@ -255,7 +256,7 @@ void renderSettings(SDL_Renderer*r,const AppConfig&c,std::uint64_t seed,int sel,
     const bool blink=(SDL_GetTicks()/350)%2==0;
     auto number=[&](int item,const std::string&normal){
         if(!editing||sel!=item)return normal;
-        return std::string("[")+(blink?editText:std::string(editText.size(),' '))+(blink?"_":" ")+"]";
+        return blink?editText:std::string(editText.size(),' ');
     };
 
     std::array<std::string,SettingCount> v={
@@ -274,8 +275,7 @@ void renderSettings(SDL_Renderer*r,const AppConfig&c,std::uint64_t seed,int sel,
         std::string("VSYNC           ")+(c.vsync?"ON":"OFF"),
         "FPS CAP         "+number(SettingFpsCap,c.fps_cap==0?"0":std::to_string(c.fps_cap))+(c.fps_cap==0&&!(editing&&sel==SettingFpsCap)?" (UNCAPPED)":""),
         std::string("TOURNAMENT      ")+(c.rules.tournament?"ON":"OFF"),
-        "SEED            "+number(SettingSeed,std::to_string(seed)),
-        "RANDOMIZE SEED",
+        "SEED SETTINGS",
         "CONTROLS",
         "MISCELLANEOUS",
         "RESET SETTINGS"
@@ -283,7 +283,7 @@ void renderSettings(SDL_Renderer*r,const AppConfig&c,std::uint64_t seed,int sel,
 
     for(int n=0;n<SettingCount;++n){
         const bool locked=c.rules.tournament&&n>=SettingLock&&n<=SettingNext;
-        const bool action=n>=SettingRandomSeed;
+        const bool action=n>=SettingSeedMenu;
         C normal=action?C{190,198,210,255}:C{210,215,225,255};
         if(n==SettingReset)normal={245,180,110,255};
         std::string label=(n==sel?"> ":"  ")+v[n]+(locked?"  [LOCKED]":"");
@@ -306,8 +306,7 @@ void renderSettings(SDL_Renderer*r,const AppConfig&c,std::uint64_t seed,int sel,
         "Synchronize presentation to the display refresh.",
         "Render cap when VSync is disabled. Enter 0 for uncapped.",
         "Apply the locked competitive ruleset during runs.",
-        "Piece-sequence seed. Press Enter and type an exact unsigned 64-bit value.",
-        "Generate a new random piece-sequence seed.",
+        "Open seed setup, randomize, copy and paste tools.",
         "Open the dedicated keyboard and gamepad rebinding screen.",
         "Future graphics area for shaders, textures and palettes.",
         "Restore gameplay/display preferences. Seed and controls stay unchanged."
@@ -317,6 +316,36 @@ void renderSettings(SDL_Renderer*r,const AppConfig&c,std::uint64_t seed,int sel,
     if(!status.empty())txt(r,220,586,status,{255,205,100,255},true);
     txt(r,220,612,hint[std::clamp(sel,0,SettingCount-1)],{150,165,182,255});
     txt(r,220,646,editing?"TYPE NUMBER   ENTER apply   ESC cancel":"ENTER edit/open/toggle   LEFT/RIGHT change   ESC save + back",{135,145,160,255});
+}
+
+void renderSeedSettings(SDL_Renderer*r,std::uint64_t seed,int sel,bool editing,const std::string&editText,const std::string&status){
+    beginCanvas(r,true);
+    set(r,{11,14,20,255});SDL_RenderClear(r);
+    txt(r,330,55,"SEED SETTINGS",{235,240,248,255},true);
+
+    const bool blink=(SDL_GetTicks()/350)%2==0;
+    const std::string seedText=editing
+        ? (blink?editText:std::string(editText.size(),' '))
+        : std::to_string(seed);
+
+    std::array<std::string,SeedSettingCount> items={
+        "SEED       "+seedText,
+        "RANDOMIZE SEED",
+        "COPY SEED",
+        "PASTE SEED",
+        "BACK"
+    };
+
+    for(int n=0;n<SeedSettingCount;++n){
+        const C normal=n==SeedSettingBack?C{170,180,195,255}:C{210,215,225,255};
+        txt(r,245,175+n*62,(n==sel?"> ":"  ")+items[n],n==sel?C{120,220,255,255}:normal,true);
+    }
+
+    txt(r,245,510,"Same seed = same deterministic piece sequence.",{155,168,185,255});
+    txt(r,245,538,"Paste reads the current system clipboard and accepts a decimal uint64 seed.",{155,168,185,255});
+    if(!status.empty())txt(r,245,580,status,{255,205,100,255},true);
+    txt(r,245,615,editing?"TYPE NUMBER   ENTER apply   ESC cancel":"UP/DOWN select   ENTER use   ESC back",{135,145,160,255});
+    if(!editing)txt(r,245,642,"CTRL/CMD+C copy   CTRL/CMD+V paste",{135,145,160,255});
 }
 
 void renderSandboxSetup(SDL_Renderer*r,const AppConfig&c,int sel){
@@ -343,21 +372,50 @@ void renderSandboxSetup(SDL_Renderer*r,const AppConfig&c,int sel){
 void renderControls(SDL_Renderer*r,const AppConfig&c,int sel,bool rebinding,bool waitpad){
     beginCanvas(r,true);
     set(r,{11,14,20,255});SDL_RenderClear(r);
-    txt(r,330,30,"CONTROLS",{235,240,248,255},true);
-    for(int n=0;n<static_cast<int>(Action::Count);++n){
-        auto a=static_cast<Action>(n);
-        std::ostringstream line;
-        line<<actionName(a)<<"   KEY "<<SDL_GetKeyName(c.keys[n])<<"   PAD "<<padName(c.pads[n]);
-        txt(r,205,82+n*44,(n==sel?"> ":"  ")+line.str(),n==sel?C{120,220,255,255}:C{210,215,225,255},true);
+    txt(r,350,28,"CONTROLS",{235,240,248,255},true);
+
+    static constexpr int grid[3][4]={
+        {0,1,2,3},
+        {4,5,6,7},
+        {8,9,kControlResetIndex,-1}
+    };
+    static constexpr const char* rowNames[3]={"MOVEMENT","ROTATION","SYSTEM"};
+    constexpr float x0=165.0f, step=195.0f, cardW=180.0f, cardH=112.0f;
+    constexpr float ys[3]={135.0f,310.0f,485.0f};
+
+    for(int row=0;row<3;++row){
+        const float rowX0=x0+(row==2?step*0.5f:0.0f);
+        txt(r,rowX0,ys[row]-28,rowNames[row],{120,135,155,255},true);
+        for(int col=0;col<4;++col){
+            const int idx=grid[row][col];
+            if(idx<0)continue;
+            const float x=rowX0+col*step;
+            const bool selected=idx==sel;
+            const C border=selected?C{120,220,255,255}:C{45,55,70,255};
+            if(selected)fill(r,x,ys[row],cardW,cardH,{17,26,36,255});
+            outline(r,x,ys[row],cardW,cardH,border);
+
+            if(idx==kControlResetIndex){
+                txt(r,x+18,ys[row]+24,"RESET CONTROLS",selected?C{120,220,255,255}:C{245,180,110,255});
+                txt(r,x+18,ys[row]+66,"ENTER",{155,168,185,255});
+                continue;
+            }
+
+            const auto a=static_cast<Action>(idx);
+            std::string title(actionName(a));
+            std::transform(title.begin(),title.end(),title.begin(),[](unsigned char ch){return static_cast<char>(std::toupper(ch));});
+            txt(r,x+14,ys[row]+14,title,selected?C{120,220,255,255}:C{210,215,225,255},true);
+            txt(r,x+14,ys[row]+55,"KEY  "+std::string(SDL_GetKeyName(c.keys[idx])),{185,195,208,255});
+            txt(r,x+14,ys[row]+79,"PAD  "+std::string(padName(c.pads[idx])),{185,195,208,255});
+        }
     }
-    txt(r,205,82+kControlResetIndex*44,(sel==kControlResetIndex?"> ":"  ")+std::string("RESET CONTROLS"),
-        sel==kControlResetIndex?C{120,220,255,255}:C{245,180,110,255},true);
+
     if(rebinding){
-        txt(r,205,590,waitpad?"PRESS A GAMEPAD BUTTON (ESC CANCELS)":"PRESS A KEY (G = BIND GAMEPAD INSTEAD)",{255,205,100,255},true);
+        txt(r,195,635,waitpad?"PRESS A GAMEPAD BUTTON (ESC CANCELS)":"PRESS A KEY (G = BIND GAMEPAD INSTEAD)",{255,205,100,255},true);
     }else if(sel==kControlResetIndex){
-        txt(r,205,590,"ENTER restore default keyboard + gamepad bindings   ESC back",{135,145,160,255});
+        txt(r,195,635,"ENTER restore defaults   ARROWS navigate   ESC back",{135,145,160,255});
     }else{
-        txt(r,205,590,"ENTER rebind keyboard   G rebind gamepad   ESC back",{135,145,160,255});
+        txt(r,195,635,"ENTER rebind keyboard   G rebind gamepad   ARROWS navigate   ESC back",{135,145,160,255});
     }
 }
 
@@ -372,8 +430,6 @@ void renderMiscellaneous(SDL_Renderer*r){
     txt(r,520,285,"FUTURE",{120,135,155,255});
     txt(r,265,340,"PALETTES",{210,215,225,255},true);
     txt(r,520,340,"FUTURE",{120,135,155,255});
-    txt(r,265,425,"This section is reserved for visual customization.",{155,168,185,255});
-    txt(r,265,455,"Gameplay-affecting rules will stay outside graphics settings.",{155,168,185,255});
     txt(r,265,610,"ESC back to Settings",{135,145,160,255});
 }
 

@@ -21,6 +21,7 @@
 #include <random>
 #include <string>
 #include <system_error>
+#include <utility>
 #include <vector>
 #if defined(__EMSCRIPTEN__)
 #include <emscripten/emscripten.h>
@@ -30,7 +31,7 @@ using namespace fasttris;
 using namespace fasttris::app;
 
 namespace {
-enum class Screen { Menu, Game, Settings, Controls, Miscellaneous, Help, Replay, ReplayMenu, SandboxSetup };
+enum class Screen { Menu, Game, Settings, SeedSettings, Controls, Miscellaneous, Help, Replay, ReplayMenu, SandboxSetup };
 
 std::uint64_t randomSeed() {
     std::random_device rd;
@@ -121,11 +122,45 @@ struct ReplayDialogContext {
     ReplayDialogAction action{ReplayDialogAction::Load};
 };
 
+enum class SeedClipboardAction { Copy, Paste };
+struct SeedClipboardResult {
+    SeedClipboardAction action{SeedClipboardAction::Paste};
+    std::string text;
+    std::string error;
+};
+struct SeedClipboardMailbox {
+    std::mutex mutex;
+    std::optional<SeedClipboardResult> pending;
+};
+
+bool parseSeedText(std::string text,std::uint64_t& out) {
+    const auto first=text.find_first_not_of(" \t\r\n");
+    if(first==std::string::npos)return false;
+    const auto last=text.find_last_not_of(" \t\r\n");
+    text=text.substr(first,last-first+1);
+    if(text.empty()||!std::all_of(text.begin(),text.end(),[](unsigned char c){return c>='0'&&c<='9';}))return false;
+    try{
+        std::size_t used=0;
+        const auto value=std::stoull(text,&used,10);
+        if(used!=text.size())return false;
+        out=static_cast<std::uint64_t>(value);
+        return true;
+    }catch(...){return false;}
+}
+
 #if defined(__EMSCRIPTEN__)
 std::weak_ptr<ReplayDialogMailbox> g_web_replay_mailbox;
+std::weak_ptr<SeedClipboardMailbox> g_web_seed_clipboard_mailbox;
 
 void postWebReplayResult(ReplayDialogResult result) {
     if (auto mailbox = g_web_replay_mailbox.lock()) {
+        std::lock_guard<std::mutex> lock(mailbox->mutex);
+        mailbox->pending = std::move(result);
+    }
+}
+
+void postWebSeedClipboardResult(SeedClipboardResult result) {
+    if (auto mailbox = g_web_seed_clipboard_mailbox.lock()) {
         std::lock_guard<std::mutex> lock(mailbox->mutex);
         mailbox->pending = std::move(result);
     }
@@ -199,6 +234,38 @@ EM_JS(void, webDownloadReplayFile, (const char* filename, const char* contents),
     anchor.remove();
     setTimeout(() => URL.revokeObjectURL(url), 1000);
 });
+
+EM_JS(void, webCopySeedToClipboard, (const char* contents), {
+    const text=UTF8ToString(contents);
+    const ok=()=>Module.ccall('fastris_web_seed_copy_ok',null,[],[]);
+    const fail=(message)=>Module.ccall('fastris_web_seed_clipboard_error',null,['string'],[message||'browser clipboard copy failed']);
+    const fallback=()=>{
+        try{
+            const area=document.createElement('textarea');
+            area.value=text;
+            area.setAttribute('readonly','');
+            area.style.position='fixed';
+            area.style.opacity='0';
+            document.body.appendChild(area);
+            area.select();
+            const copied=document.execCommand('copy');
+            area.remove();
+            copied?ok():fail('browser blocked clipboard copy');
+        }catch(e){fail('browser blocked clipboard copy');}
+    };
+    if(navigator.clipboard&&navigator.clipboard.writeText&&window.isSecureContext){
+        navigator.clipboard.writeText(text).then(ok).catch(()=>fallback());
+    }else fallback();
+});
+
+EM_JS(void, webPasteSeedFromClipboard, (), {
+    const fail=(message)=>Module.ccall('fastris_web_seed_clipboard_error',null,['string'],[message||'browser clipboard paste failed']);
+    if(navigator.clipboard&&navigator.clipboard.readText&&window.isSecureContext){
+        navigator.clipboard.readText().then((text)=>{
+            Module.ccall('fastris_web_seed_pasted',null,['string'],[text]);
+        }).catch(()=>fail('browser blocked clipboard read'));
+    }else fail('clipboard read is unavailable in this browser');
+});
 #endif
 
 static const SDL_DialogFileFilter kReplayFilters[]={{"FasTris replay","ftr"}};
@@ -249,15 +316,39 @@ struct ReplayViewer {
     double speed{1.0};
     Uint64 last_wall_ns{};
 
+    // Verification is intentionally split into two cheap, bounded phases:
+    // 1) an independent replay simulation started at load and advanced in small
+    //    slices across frames, and 2) a single hash comparison of the viewer's
+    //    actual state when playback reaches the end.
+    std::unique_ptr<Game> load_verify_game;
+    std::size_t load_verify_index{};
+    TimeUs load_verify_playhead{};
+    std::optional<bool> load_verification_result;
+    std::optional<bool> end_verification_result;
+
     bool load(const std::string& path, std::string& err) {
         if (!loadReplay(path, rep, &err)) return false;
+        resetVerification();
         reset(0);
         return true;
     }
 
     void load(Replay replay) {
         rep = std::move(replay);
+        resetVerification();
         reset(0);
+    }
+
+    void resetVerification() {
+        load_verification_result.reset();
+        end_verification_result.reset();
+        load_verify_index = 0;
+        load_verify_playhead = 0;
+        if (rep.final_hash.empty()) {
+            load_verify_game.reset();
+        } else {
+            load_verify_game = std::make_unique<Game>(rep.seed, rep.mode, rep.rules);
+        }
     }
 
     void reset(TimeUs target) {
@@ -286,7 +377,68 @@ struct ReplayViewer {
         playhead = target;
     }
 
+    void stepLoadVerification() {
+        if (!load_verify_game || load_verification_result.has_value()) return;
+
+        // Keep browser/main-thread verification bounded. Even a long replay is
+        // verified over multiple frames instead of blocking the UI on load.
+        constexpr Uint64 kWallBudgetNs = 1500000;  // ~1.5 ms per frame max
+        constexpr TimeUs kSimChunkUs = 2000000;    // at most 2 s simulation per step
+        const Uint64 deadline = SDL_GetTicksNS() + kWallBudgetNs;
+
+        while (SDL_GetTicksNS() < deadline) {
+            if (load_verify_index < rep.events.size()) {
+                const auto& e = rep.events[load_verify_index];
+                const TimeUs target = std::min(e.time_us, load_verify_playhead + kSimChunkUs);
+                load_verify_game->advanceTo(target);
+                load_verify_playhead = target;
+                if (load_verify_playhead < e.time_us) continue;
+
+                // Preserve exact ordering for multiple events at one timestamp.
+                while (load_verify_index < rep.events.size() &&
+                       rep.events[load_verify_index].time_us == load_verify_playhead) {
+                    const auto& at = rep.events[load_verify_index];
+                    if (at.down) load_verify_game->press(at.action);
+                    else load_verify_game->release(at.action);
+                    ++load_verify_index;
+                    if (SDL_GetTicksNS() >= deadline) break;
+                }
+                continue;
+            }
+
+            if (load_verify_playhead < rep.duration_us) {
+                const TimeUs target = std::min(rep.duration_us, load_verify_playhead + kSimChunkUs);
+                load_verify_game->advanceTo(target);
+                load_verify_playhead = target;
+                continue;
+            }
+
+            load_verification_result = stateHash(*load_verify_game) == rep.final_hash;
+            load_verify_game.reset();
+            break;
+        }
+    }
+
+    void verifyEndStateIfNeeded() {
+        if (!paused || playhead < rep.duration_us || end_verification_result.has_value()) return;
+        if (rep.final_hash.empty()) return;
+        end_verification_result = stateHash(*game) == rep.final_hash;
+    }
+
+    std::optional<bool> visibleVerificationResult() const {
+        // Any failed check wins. Otherwise prefer the end-of-playback check,
+        // then the independent load-time verification if it has finished.
+        if ((load_verification_result.has_value() && !*load_verification_result) ||
+            (end_verification_result.has_value() && !*end_verification_result)) {
+            return false;
+        }
+        if (end_verification_result.has_value()) return end_verification_result;
+        if (load_verification_result.has_value()) return load_verification_result;
+        return std::nullopt;
+    }
+
     void tick(Uint64 now) {
+        stepLoadVerification();
         if (last_wall_ns == 0) last_wall_ns = now;
         if (!paused) {
             const auto delta = now - last_wall_ns;
@@ -294,6 +446,7 @@ struct ReplayViewer {
             seek(std::min(rep.duration_us, playhead + add));
             if (playhead >= rep.duration_us) paused = true;
         }
+        verifyEndStateIfNeeded();
         last_wall_ns = now;
     }
 
@@ -441,6 +594,7 @@ struct AppState {
     Screen screen{Screen::Menu};
     int menu_sel{};
     int settings_sel{};
+    int seed_settings_sel{};
     int controls_sel{};
     int custom_sel{};
     int replay_menu_sel{};
@@ -455,10 +609,15 @@ struct AppState {
     bool settings_number_replace_on_type{};
     std::string settings_number_text;
     std::string settings_status;
+    bool seed_number_editing{};
+    bool seed_number_replace_on_type{};
+    std::string seed_number_text;
+    std::string seed_status;
     std::string config_path;
     std::string last_replay_path;
     std::string replay_status;
     std::shared_ptr<ReplayDialogMailbox> replay_dialog_mailbox{std::make_shared<ReplayDialogMailbox>()};
+    std::shared_ptr<SeedClipboardMailbox> seed_clipboard_mailbox{std::make_shared<SeedClipboardMailbox>()};
     bool replay_dialog_open{};
     bool replay_dialog_paused_run{};
     bool pending_save_from_game{};
@@ -559,6 +718,65 @@ struct AppState {
         if(resume_run&&run.game&&run.paused)run.togglePause(SDL_GetTicksNS());
     }
 
+    void processSeedClipboard() {
+        std::optional<SeedClipboardResult> result;
+        {
+            std::lock_guard<std::mutex> lock(seed_clipboard_mailbox->mutex);
+            if(seed_clipboard_mailbox->pending){
+                result=std::move(seed_clipboard_mailbox->pending);
+                seed_clipboard_mailbox->pending.reset();
+            }
+        }
+        if(!result)return;
+        if(!result->error.empty()){
+            seed_status=result->error;
+            return;
+        }
+        if(result->action==SeedClipboardAction::Copy){
+            seed_status="SEED COPIED";
+            return;
+        }
+        std::uint64_t value=0;
+        if(!parseSeedText(result->text,value)){
+            seed_status="CLIPBOARD DOES NOT CONTAIN A VALID UINT64 SEED";
+            return;
+        }
+        seed=value;
+        seed_status="SEED PASTED";
+    }
+
+    void copySeed() {
+        const std::string text=std::to_string(seed);
+#if defined(__EMSCRIPTEN__)
+        g_web_seed_clipboard_mailbox=seed_clipboard_mailbox;
+        seed_status="COPYING SEED...";
+        webCopySeedToClipboard(text.c_str());
+#else
+        if(SDL_SetClipboardText(text.c_str())) seed_status="SEED COPIED";
+        else seed_status=std::string("COPY FAILED: ")+SDL_GetError();
+#endif
+    }
+
+    void pasteSeed() {
+#if defined(__EMSCRIPTEN__)
+        g_web_seed_clipboard_mailbox=seed_clipboard_mailbox;
+        seed_status="READING CLIPBOARD...";
+        webPasteSeedFromClipboard();
+#else
+        char* raw=SDL_GetClipboardText();
+        if(!raw){seed_status=std::string("PASTE FAILED: ")+SDL_GetError();return;}
+        std::string text(raw);
+        SDL_free(raw);
+        std::uint64_t value=0;
+        if(!parseSeedText(text,value)){
+            seed_status="CLIPBOARD DOES NOT CONTAIN A VALID UINT64 SEED";
+            return;
+        }
+        seed=value;
+        seed_status="SEED PASTED";
+#endif
+    }
+
     bool settingLocked(int item) const {
         return cfg.rules.tournament && item >= SettingLock && item <= SettingNext;
     }
@@ -567,7 +785,7 @@ struct AppState {
         switch (item) {
             case SettingDas: case SettingArr: case SettingSdf: case SettingDcd:
             case SettingLock: case SettingResets: case SettingNext:
-            case SettingFpsCap: case SettingSeed:
+            case SettingFpsCap:
                 return true;
             default:
                 return false;
@@ -590,7 +808,6 @@ struct AppState {
             case SettingResets: settings_number_text = std::to_string(h.max_lock_resets); break;
             case SettingNext: settings_number_text = std::to_string(cfg.rules.next_count); break;
             case SettingFpsCap: settings_number_text = std::to_string(cfg.fps_cap); break;
-            case SettingSeed: settings_number_text = std::to_string(seed); break;
             default: return;
         }
         settings_status.clear();
@@ -637,12 +854,11 @@ struct AppState {
                 case SettingResets: ok = assignInt(0, 100, h.max_lock_resets, "0-100"); break;
                 case SettingNext: ok = assignInt(1, 8, cfg.rules.next_count, "1-8"); break;
                 case SettingFpsCap: ok = assignInt(0, 1000, cfg.fps_cap, "0-1000"); break;
-                case SettingSeed: seed = static_cast<std::uint64_t>(value); ok = true; break;
                 default: break;
             }
             if (!ok) return false;
         } catch (...) {
-            settings_status = settings_sel == SettingSeed ? "INVALID UINT64 SEED" : "INVALID NUMBER";
+            settings_status = "INVALID NUMBER";
             return false;
         }
 
@@ -653,6 +869,79 @@ struct AppState {
         SDL_StopTextInput(win);
         saveConfig(config_path, cfg);
         return true;
+    }
+
+    void beginSeedNumberEdit() {
+        seed_number_text=std::to_string(seed);
+        seed_status.clear();
+        seed_number_editing=true;
+        seed_number_replace_on_type=true;
+        SDL_StartTextInput(win);
+    }
+
+    void cancelSeedNumberEdit() {
+        if(!seed_number_editing)return;
+        seed_number_editing=false;
+        seed_number_replace_on_type=false;
+        seed_number_text.clear();
+        seed_status.clear();
+        SDL_StopTextInput(win);
+    }
+
+    bool applySeedNumberEdit() {
+        std::uint64_t value=0;
+        if(!parseSeedText(seed_number_text,value)){
+            seed_status="INVALID UINT64 SEED";
+            return false;
+        }
+        seed=value;
+        seed_number_editing=false;
+        seed_number_replace_on_type=false;
+        seed_number_text.clear();
+        seed_status="SEED APPLIED";
+        SDL_StopTextInput(win);
+        return true;
+    }
+
+    static int controlGridIndex(int row,int col) {
+        static constexpr int grid[3][4]={
+            {0,1,2,3},
+            {4,5,6,7},
+            {8,9,kControlResetIndex,-1}
+        };
+        row=std::clamp(row,0,2);
+        col=std::clamp(col,0,3);
+        if(grid[row][col]>=0)return grid[row][col];
+        for(int c=col-1;c>=0;--c)if(grid[row][c]>=0)return grid[row][c];
+        return grid[row][0];
+    }
+
+    static std::pair<int,int> controlGridPosition(int index) {
+        static constexpr int grid[3][4]={
+            {0,1,2,3},
+            {4,5,6,7},
+            {8,9,kControlResetIndex,-1}
+        };
+        for(int row=0;row<3;++row)for(int col=0;col<4;++col)if(grid[row][col]==index)return {row,col};
+        return {0,0};
+    }
+
+    void moveControlSelection(int dx,int dy) {
+        auto [row,col]=controlGridPosition(controls_sel);
+        if(dy!=0){
+            row=(row+dy+3)%3;
+            controls_sel=controlGridIndex(row,col);
+            return;
+        }
+        if(dx!=0){
+            int next=col;
+            for(int tries=0;tries<4;++tries){
+                next=(next+dx+4)%4;
+                const int candidate=controlGridIndex(row,next);
+                const auto [candidateRow,candidateCol]=controlGridPosition(candidate);
+                if(candidateRow==row&&candidateCol==next){controls_sel=candidate;return;}
+            }
+        }
     }
 
     void adjustSetting(int delta) {
@@ -692,10 +981,6 @@ struct AppState {
                 break;
             }
             case SettingTournament: cfg.rules.tournament = !cfg.rules.tournament; break;
-            case SettingSeed:
-                if (delta > 0 && seed < std::numeric_limits<std::uint64_t>::max()) ++seed;
-                else if (delta < 0 && seed > 0) --seed;
-                break;
             default: return;
         }
         settings_status.clear();
@@ -716,9 +1001,10 @@ struct AppState {
             case SettingShowInputs: case SettingVsync: case SettingTournament:
                 adjustSetting(1);
                 break;
-            case SettingRandomSeed:
-                seed = randomSeed();
-                settings_status = "NEW RANDOM SEED";
+            case SettingSeedMenu:
+                seed_settings_sel=SeedSettingValue;
+                seed_status.clear();
+                screen=Screen::SeedSettings;
                 break;
             case SettingControls:
                 controls_sel = 0;
@@ -1004,7 +1290,7 @@ struct AppState {
         if (screen == Screen::Settings) {
             if (settings_number_editing) {
                 if (ev.type == SDL_EVENT_TEXT_INPUT) {
-                    const std::size_t limit = settings_sel == SettingSeed ? 20u : 10u;
+                    constexpr std::size_t limit = 10u;
                     bool has_digit = false;
                     for (const char* c = ev.text.text; *c; ++c) if (*c >= '0' && *c <= '9') { has_digit = true; break; }
                     if (has_digit && settings_number_replace_on_type) { settings_number_text.clear(); settings_number_replace_on_type = false; }
@@ -1045,6 +1331,56 @@ struct AppState {
             return SDL_APP_CONTINUE;
         }
 
+        if (screen == Screen::SeedSettings) {
+            if(seed_number_editing){
+                if(ev.type==SDL_EVENT_TEXT_INPUT){
+                    constexpr std::size_t limit=20u;
+                    bool has_digit=false;
+                    for(const char* c=ev.text.text;*c;++c)if(*c>='0'&&*c<='9'){has_digit=true;break;}
+                    if(has_digit&&seed_number_replace_on_type){seed_number_text.clear();seed_number_replace_on_type=false;}
+                    for(const char* c=ev.text.text;*c&&seed_number_text.size()<limit;++c){
+                        if(*c>='0'&&*c<='9')seed_number_text.push_back(*c);
+                    }
+                }else if(ev.type==SDL_EVENT_KEY_DOWN&&!ev.key.repeat){
+                    if(ev.key.key==SDLK_BACKSPACE){
+                        if(seed_number_replace_on_type){seed_number_text.clear();seed_number_replace_on_type=false;}
+                        else if(!seed_number_text.empty())seed_number_text.pop_back();
+                    }else if(ev.key.key==SDLK_ESCAPE)cancelSeedNumberEdit();
+                    else if(ev.key.key==SDLK_RETURN||ev.key.key==SDLK_KP_ENTER)applySeedNumberEdit();
+                }
+                return SDL_APP_CONTINUE;
+            }
+
+            if(ev.type==SDL_EVENT_KEY_DOWN&&!ev.key.repeat){
+                const auto key=ev.key.key;
+                const bool clipboard_modifier=(ev.key.mod&(SDL_KMOD_CTRL|SDL_KMOD_GUI))!=0;
+                if(clipboard_modifier&&key==SDLK_C){
+                    copySeed();
+                }else if(clipboard_modifier&&key==SDLK_V){
+                    pasteSeed();
+                }else if(key==SDLK_ESCAPE){
+                    seed_status.clear();
+                    screen=Screen::Settings;
+                }else if(key==SDLK_UP){
+                    seed_settings_sel=(seed_settings_sel+SeedSettingCount-1)%SeedSettingCount;
+                    seed_status.clear();
+                }else if(key==SDLK_DOWN){
+                    seed_settings_sel=(seed_settings_sel+1)%SeedSettingCount;
+                    seed_status.clear();
+                }else if(key==SDLK_RETURN||key==SDLK_KP_ENTER){
+                    switch(seed_settings_sel){
+                        case SeedSettingValue: beginSeedNumberEdit(); break;
+                        case SeedSettingRandomize: seed=randomSeed();seed_status="NEW RANDOM SEED";break;
+                        case SeedSettingCopy: copySeed(); break;
+                        case SeedSettingPaste: pasteSeed(); break;
+                        case SeedSettingBack: seed_status.clear();screen=Screen::Settings;break;
+                        default: break;
+                    }
+                }
+            }
+            return SDL_APP_CONTINUE;
+        }
+
         if (screen == Screen::Miscellaneous) {
             if (ev.type == SDL_EVENT_KEY_DOWN && !ev.key.repeat && ev.key.key == SDLK_ESCAPE) {
                 screen = Screen::Settings;
@@ -1080,9 +1416,13 @@ struct AppState {
                     screen = Screen::Settings;
                     saveConfig(config_path, cfg);
                 } else if (key == SDLK_UP) {
-                    controls_sel = (controls_sel + kControlItemCount - 1) % kControlItemCount;
+                    moveControlSelection(0,-1);
                 } else if (key == SDLK_DOWN) {
-                    controls_sel = (controls_sel + 1) % kControlItemCount;
+                    moveControlSelection(0,1);
+                } else if (key == SDLK_LEFT) {
+                    moveControlSelection(-1,0);
+                } else if (key == SDLK_RIGHT) {
+                    moveControlSelection(1,0);
                 } else if (key == SDLK_RETURN || key == SDLK_KP_ENTER) {
                     if (controls_sel == kControlResetIndex) {
                         resetControls(cfg);
@@ -1173,6 +1513,7 @@ struct AppState {
         frame_start = SDL_GetTicksNS();
         const auto now = frame_start;
         processReplayDialog();
+        processSeedClipboard();
 
         if (screen == Screen::Game && run.game) {
             run.advance(now);
@@ -1196,18 +1537,24 @@ struct AppState {
             info.replay_paused = viewer.paused;
             info.recent_inputs = viewer.recent();
             info.show_inputs = cfg.show_inputs;
-            info.status = !replay_status.empty()
-                              ? replay_status
-                              : (viewer.rep.final_hash.empty()
-                                  ? "UNVERIFIED REPLAY"
-                                  : (verifyReplay(viewer.rep) ? "REPLAY VERIFIED" : "REPLAY HASH FAILED"));
+            if (!replay_status.empty()) {
+                info.status = replay_status;
+            } else if (viewer.paused) {
+                if (viewer.rep.final_hash.empty()) {
+                    info.status = "UNVERIFIED REPLAY";
+                } else if (const auto verified = viewer.visibleVerificationResult(); verified.has_value()) {
+                    info.status = *verified ? "REPLAY VERIFIED" : "REPLAY HASH FAILED";
+                }
+            }
             renderGame(ren, *viewer.game, info);
         } else if (screen == Screen::Menu) {
             renderMenu(ren, menu_sel, cfg.rules.tournament);
         } else if (screen == Screen::ReplayMenu) {
             renderReplayMenu(ren, replay_menu_sel, lastReplayExists(), replay_status);
         } else if (screen == Screen::Settings) {
-            renderSettings(ren, cfg, seed, settings_sel, settings_number_editing, settings_number_text, settings_status);
+            renderSettings(ren, cfg, settings_sel, settings_number_editing, settings_number_text, settings_status);
+        } else if (screen == Screen::SeedSettings) {
+            renderSeedSettings(ren, seed, seed_settings_sel, seed_number_editing, seed_number_text, seed_status);
         } else if (screen == Screen::SandboxSetup) {
             renderSandboxSetup(ren, cfg, custom_sel);
         } else if (screen == Screen::Controls) {
@@ -1264,6 +1611,27 @@ extern "C" EMSCRIPTEN_KEEPALIVE void fastris_web_replay_error(const char* messag
     result.action=ReplayDialogAction::Load;
     result.error=message?message:"browser replay picker failed";
     postWebReplayResult(std::move(result));
+}
+
+extern "C" EMSCRIPTEN_KEEPALIVE void fastris_web_seed_copy_ok() {
+    SeedClipboardResult result;
+    result.action=SeedClipboardAction::Copy;
+    postWebSeedClipboardResult(std::move(result));
+}
+
+extern "C" EMSCRIPTEN_KEEPALIVE void fastris_web_seed_pasted(const char* text) {
+    SeedClipboardResult result;
+    result.action=SeedClipboardAction::Paste;
+    if(text)result.text=text;
+    else result.error="browser returned an empty clipboard";
+    postWebSeedClipboardResult(std::move(result));
+}
+
+extern "C" EMSCRIPTEN_KEEPALIVE void fastris_web_seed_clipboard_error(const char* message) {
+    SeedClipboardResult result;
+    result.action=SeedClipboardAction::Paste;
+    result.error=message?message:"browser clipboard operation failed";
+    postWebSeedClipboardResult(std::move(result));
 }
 #endif
 
