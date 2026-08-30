@@ -54,6 +54,7 @@ for rel, needles in checks.items():
         if needle not in text:
             fail(f"{rel} is missing expected identity marker: {needle}")
 
+
 # CI regression checks for platform-specific failures seen on clean GitHub runners.
 build_workflow = (ROOT / ".github/workflows/build.yml").read_text(encoding="utf-8")
 release_workflow = (ROOT / ".github/workflows/release.yml").read_text(encoding="utf-8")
@@ -65,15 +66,14 @@ for name, workflow in [("build.yml", build_workflow), ("release.yml", release_wo
     if "lipo -verify_arch" in workflow:
         fail(f"{name} uses the fragile/incorrect lipo -verify_arch invocation; verify lipo -archs output instead")
 
-# Release jobs must not be skipped just because the current VERSION tag already exists.
-if "release_needed" in release_workflow:
-    fail("release.yml must rebuild/refresh the current VERSION release instead of gating jobs on release_needed")
-if "needs.version.outputs.release_needed" in release_workflow:
-    fail("release.yml still contains the old release-needed skip condition")
+
+# Release jobs must rebuild/refresh the current VERSION release instead of being skipped by an existing tag.
+if "release_needed" in release_workflow or "needs.version.outputs.release_needed" in release_workflow:
+    fail("release.yml must not gate release jobs on release_needed")
 if "git/refs/tags/$TAG" not in release_workflow or "-F force=true" not in release_workflow:
-    fail("release.yml must refresh an existing VERSION tag to the tested main commit")
-if "gh release upload \"$TAG\" dist/* --clobber" not in release_workflow:
-    fail("release.yml must replace existing release assets after a successful rebuild")
+    fail("release.yml must refresh the existing VERSION tag to the tested main commit")
+if "gh release delete-asset" not in release_workflow:
+    fail("release.yml must remove old release assets before publishing the exact current payload")
 
 # Distribution/readme regression checks.
 dependabot = (ROOT / ".github/dependabot.yml").read_text(encoding="utf-8")
@@ -87,22 +87,29 @@ for needle in ["actions/deploy-pages@", "actions/upload-pages-artifact@", "build
     if needle not in pages_workflow:
         fail(f"pages.yml is missing required Pages deployment marker: {needle}")
 
-for alias in [
-    "FasTris-Windows-x64.zip",
-    "FasTris-Linux-x86_64.tar.gz",
-    "FasTris-macOS-universal.zip",
+release_assets = [
+    "FasTris-Windows.zip",
+    "FasTris-Linux.tar.gz",
+    "FasTris-macOS.zip",
     "FasTris-Web.zip",
     "FasTris-Android.apk",
-]:
-    if alias not in release_workflow:
-        fail(f"release.yml is missing stable latest-download asset alias: {alias}")
+    "SHA256SUMS.txt",
+]
+for asset in release_assets:
+    if asset not in release_workflow:
+        fail(f"release.yml is missing required release asset: {asset}")
+
+if re.search(r"dist/FasTris-v[^\n\"']*\.(?:zip|tar\.gz|apk)", release_workflow):
+    fail("release.yml must not publish versioned duplicate platform packages")
+
 
 readme = (ROOT / "README.md").read_text(encoding="utf-8")
 for needle in [
     "https://draconov.github.io/FasTris/",
-    "releases/latest/download/FasTris-Windows-x64.zip",
-    "releases/latest/download/FasTris-Linux-x86_64.tar.gz",
-    "releases/latest/download/FasTris-macOS-universal.zip",
+    "releases/latest/download/FasTris-Windows.zip",
+    "releases/latest/download/FasTris-Linux.tar.gz",
+    "releases/latest/download/FasTris-macOS.zip",
+    "releases/latest/download/FasTris-Web.zip",
     "releases/latest/download/FasTris-Android.apk",
 ]:
     if needle not in readme:

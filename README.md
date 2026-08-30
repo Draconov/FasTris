@@ -6,10 +6,11 @@
 **Tetris built for competitive players.**
 
 [![Play Online](https://img.shields.io/badge/PLAY-ONLINE-14a8b2?style=for-the-badge&logo=github)](https://draconov.github.io/FasTris/)
-[![Download Windows](https://img.shields.io/badge/DOWNLOAD-WINDOWS-0078D6?style=for-the-badge&logo=windows11&logoColor=white)](https://github.com/Draconov/FasTris/releases/latest/download/FasTris-Windows-x64.zip)
-[![Download Linux](https://img.shields.io/badge/DOWNLOAD-LINUX-FCC624?style=for-the-badge&logo=linux&logoColor=000000)](https://github.com/Draconov/FasTris/releases/latest/download/FasTris-Linux-x86_64.tar.gz)
-[![Download macOS](https://img.shields.io/badge/DOWNLOAD-macOS-000000?style=for-the-badge&logo=apple&logoColor=white)](https://github.com/Draconov/FasTris/releases/latest/download/FasTris-macOS-universal.zip)
+[![Download Windows](https://img.shields.io/badge/DOWNLOAD-WINDOWS-0078D6?style=for-the-badge&logo=windows11&logoColor=white)](https://github.com/Draconov/FasTris/releases/latest/download/FasTris-Windows.zip)
+[![Download Linux](https://img.shields.io/badge/DOWNLOAD-LINUX-FCC624?style=for-the-badge&logo=linux&logoColor=000000)](https://github.com/Draconov/FasTris/releases/latest/download/FasTris-Linux.tar.gz)
+[![Download macOS](https://img.shields.io/badge/DOWNLOAD-macOS-000000?style=for-the-badge&logo=apple&logoColor=white)](https://github.com/Draconov/FasTris/releases/latest/download/FasTris-macOS.zip)
 [![Download Android](https://img.shields.io/badge/DOWNLOAD-ANDROID-3DDC84?style=for-the-badge&logo=android&logoColor=white)](https://github.com/Draconov/FasTris/releases/latest/download/FasTris-Android.apk)
+[![Download Web](https://img.shields.io/badge/DOWNLOAD-WEB-E34F26?style=for-the-badge&logo=html5&logoColor=white)](https://github.com/Draconov/FasTris/releases/latest/download/FasTris-Web.zip)
 
 [![Build](https://github.com/Draconov/FasTris/actions/workflows/build.yml/badge.svg)](https://github.com/Draconov/FasTris/actions/workflows/build.yml)
 [![Web](https://github.com/Draconov/FasTris/actions/workflows/pages.yml/badge.svg)](https://github.com/Draconov/FasTris/actions/workflows/pages.yml)
