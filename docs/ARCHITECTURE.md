@@ -19,7 +19,7 @@ Piece generation uses PCG32 through `Bag7`.
 
 Garbage uses a separately seeded PCG32 stream. Cosmetic systems should use another RNG and must never consume gameplay RNG values.
 
-Seed derivation is versioned. If a future release changes a randomizer algorithm, introduce a new replay/randomizer version instead of silently changing existing seeds.
+Seed derivation is versioned. If a future release changes a randomizer algorithm, introduce a new replay/randomizer version instead of silently changing existing seeds. Gameplay rule changes use the replay `simver` field so old runs can retain their original deterministic scoring and finesse behavior.
 
 ## Timing
 
@@ -30,7 +30,7 @@ Scheduled events include:
 - gravity ticks
 - DAS expiry / ARR repeat
 - lock deadline
-- Ultra timeout
+- Ultra / Custom mode timeout
 
 When multiple simulation events have the same timestamp, the engine resolves them in a deterministic order.
 

@@ -53,13 +53,16 @@ private:
     ClearKind classifyClear(Spin spin, int lines) const;
     TimeUs baseGravityInterval() const;
     TimeUs currentGravityInterval() const;
+    TimeUs modeTimeLimit() const;
     void scheduleGravityFromNow();
     void processHorizontalRepeat();
     void setHorizontal(int dir, bool down);
     void applyReadyGarbage();
     void seedCheese();
+    void seedStartingGarbage(int lines);
     void checkModeCompletion();
     int estimatedOptimalFinesseInputs() const;
+    int estimatedOptimalFinesseInputsLegacy() const;
 
     std::uint64_t seed_{};
     Mode mode_{};

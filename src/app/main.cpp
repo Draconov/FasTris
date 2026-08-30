@@ -22,7 +22,7 @@ using namespace fasttris;
 using namespace fasttris::app;
 
 namespace {
-enum class Screen { Menu, Game, Settings, Controls, SeedEntry, Help, Replay };
+enum class Screen { Menu, Game, Settings, Controls, SeedEntry, Help, Replay, CustomSetup };
 
 std::uint64_t randomSeed() {
     std::random_device rd;
@@ -56,8 +56,21 @@ std::uint64_t seedFromText(const std::string& s) {
     return std::stoull(hash.substr(0, 16), nullptr, 16);
 }
 
-Rules effectiveRules(const AppConfig& cfg) {
+Rules effectiveRules(const AppConfig& cfg, Mode mode) {
     Rules rules = cfg.rules;
+
+    // Seed Race must compare like with like. Player handling (DAS/ARR/SDF/DCD)
+    // stays personal, while placement-affecting rules are standardized.
+    if (mode == Mode::SeedRace) {
+        rules.handling.allow_180 = true;
+        rules.handling.irs = true;
+        rules.handling.ihs = true;
+        rules.handling.lock_delay_ms = 500;
+        rules.handling.max_lock_resets = 15;
+        rules.ghost = true;
+        rules.next_count = 5;
+    }
+
     if (!rules.tournament) return rules;
 
     // Tournament lock changes only the rules used by the run. Personal settings
@@ -275,6 +288,7 @@ struct AppState {
     int menu_sel{};
     int settings_sel{};
     int controls_sel{};
+    int custom_sel{};
     bool rebinding{};
     bool wait_pad{};
     bool fullscreen{};
@@ -289,7 +303,7 @@ struct AppState {
     Uint64 frame_start{};
 
     void startRun(Mode mode, Uint64 now) {
-        run.start(seed, mode, effectiveRules(cfg), now);
+        run.start(seed, mode, effectiveRules(cfg, mode), now);
         screen = Screen::Game;
     }
 
@@ -486,8 +500,11 @@ struct AppState {
                 } else if (key == SDLK_H) {
                     screen = Screen::Help;
                 } else if (key == SDLK_RETURN || key == SDLK_KP_ENTER) {
-                    if (menu_sel < 8) {
+                    if (menu_sel < 7) {
                         startRun(modeFromMenu(menu_sel), ev.key.timestamp);
+                    } else if (menu_sel == 7) {
+                        custom_sel = 0;
+                        screen = Screen::CustomSetup;
                     } else if (menu_sel == 8) {
                         screen = Screen::Settings;
                     } else if (menu_sel == 9) {
@@ -499,6 +516,50 @@ struct AppState {
                         }
                     } else {
                         return SDL_APP_SUCCESS;
+                    }
+                }
+            }
+            return SDL_APP_CONTINUE;
+        }
+
+        if (screen == Screen::CustomSetup) {
+            if (ev.type == SDL_EVENT_KEY_DOWN && !ev.key.repeat) {
+                const auto key = ev.key.key;
+                if (key == SDLK_ESCAPE) {
+                    saveConfig(config_path, cfg);
+                    screen = Screen::Menu;
+                } else if (key == SDLK_UP) {
+                    custom_sel = (custom_sel + 4) % 5;
+                } else if (key == SDLK_DOWN) {
+                    custom_sel = (custom_sel + 1) % 5;
+                } else if (key == SDLK_LEFT || key == SDLK_RIGHT) {
+                    const int delta = key == SDLK_RIGHT ? 1 : -1;
+                    auto& r = cfg.rules;
+                    if (custom_sel == 0) {
+                        static constexpr int values[] = {0, 2000, 1000, 500, 250, 100, 50, 16, 8, 1};
+                        int at = 0;
+                        for (int i = 0; i < 10; ++i) if (values[i] == r.custom_gravity_ms) at = i;
+                        at = std::clamp(at + delta, 0, 9);
+                        r.custom_gravity_ms = values[at];
+                    } else if (custom_sel == 1) {
+                        static constexpr int values[] = {0, 20, 40, 100, 150, 200, 1000};
+                        int at = 0;
+                        for (int i = 0; i < 7; ++i) if (values[i] == r.custom_line_goal) at = i;
+                        at = std::clamp(at + delta, 0, 6);
+                        r.custom_line_goal = values[at];
+                    } else if (custom_sel == 2) {
+                        static constexpr int values[] = {0, 30, 60, 120, 180, 300, 600};
+                        int at = 0;
+                        for (int i = 0; i < 7; ++i) if (values[i] == r.custom_time_limit_s) at = i;
+                        at = std::clamp(at + delta, 0, 6);
+                        r.custom_time_limit_s = values[at];
+                    } else if (custom_sel == 3) {
+                        r.custom_start_garbage = std::clamp(r.custom_start_garbage + delta, 0, 12);
+                    }
+                } else if (key == SDLK_RETURN || key == SDLK_KP_ENTER) {
+                    if (custom_sel == 4) {
+                        saveConfig(config_path, cfg);
+                        startRun(Mode::Custom, ev.key.timestamp);
                     }
                 }
             }
@@ -632,7 +693,7 @@ struct AppState {
                     return SDL_APP_CONTINUE;
                 }
                 if (key == cfg.keys[static_cast<int>(Action::Restart)]) {
-                    run.start(seed, run.game->mode(), effectiveRules(cfg), timestamp);
+                    run.start(seed, run.game->mode(), effectiveRules(cfg, run.game->mode()), timestamp);
                     return SDL_APP_CONTINUE;
                 }
                 if (key == SDLK_F6) {
@@ -653,7 +714,7 @@ struct AppState {
                     return SDL_APP_CONTINUE;
                 }
                 if (button == cfg.pads[static_cast<int>(Action::Restart)]) {
-                    run.start(seed, run.game->mode(), effectiveRules(cfg), timestamp);
+                    run.start(seed, run.game->mode(), effectiveRules(cfg, run.game->mode()), timestamp);
                     return SDL_APP_CONTINUE;
                 }
                 const auto action = padAction(cfg, button);
@@ -699,6 +760,8 @@ struct AppState {
             renderMenu(ren, menu_sel, seed, cfg.rules.tournament, lastReplayExists());
         } else if (screen == Screen::Settings) {
             renderSettings(ren, cfg, settings_sel);
+        } else if (screen == Screen::CustomSetup) {
+            renderCustomSetup(ren, cfg, custom_sel);
         } else if (screen == Screen::Controls) {
             renderControls(ren, cfg, controls_sel, rebinding, wait_pad);
         } else if (screen == Screen::SeedEntry) {

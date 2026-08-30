@@ -15,6 +15,10 @@ void clampConfig(AppConfig&c){
     h.lock_delay_ms=std::clamp(h.lock_delay_ms,0,2000);
     h.max_lock_resets=std::clamp(h.max_lock_resets,0,100);
     c.rules.next_count=std::clamp(c.rules.next_count,1,8);
+    c.rules.custom_gravity_ms=std::clamp(c.rules.custom_gravity_ms,0,5000);
+    c.rules.custom_line_goal=std::clamp(c.rules.custom_line_goal,0,1000);
+    c.rules.custom_time_limit_s=std::clamp(c.rules.custom_time_limit_s,0,3600);
+    c.rules.custom_start_garbage=std::clamp(c.rules.custom_start_garbage,0,12);
     c.fps_cap=std::clamp(c.fps_cap,0,1000);
 }
 }
@@ -42,6 +46,10 @@ bool loadConfig(const std::string&path,AppConfig&c){
             else if(k=="ihs")h.ihs=n!=0;
             else if(k=="ghost")c.rules.ghost=n!=0;
             else if(k=="next")c.rules.next_count=n;
+            else if(k=="customgrav")c.rules.custom_gravity_ms=n;
+            else if(k=="customlines")c.rules.custom_line_goal=n;
+            else if(k=="customtime")c.rules.custom_time_limit_s=n;
+            else if(k=="customgarbage")c.rules.custom_start_garbage=n;
             else if(k=="vsync")c.vsync=n!=0;
             else if(k=="fps")c.fps_cap=n;
             else if(k=="tournament")c.rules.tournament=n!=0;
@@ -65,6 +73,10 @@ bool saveConfig(const std::string&path,const AppConfig&c){
      <<"\nihs="<<h.ihs
      <<"\nghost="<<c.rules.ghost
      <<"\nnext="<<c.rules.next_count
+     <<"\ncustomgrav="<<c.rules.custom_gravity_ms
+     <<"\ncustomlines="<<c.rules.custom_line_goal
+     <<"\ncustomtime="<<c.rules.custom_time_limit_s
+     <<"\ncustomgarbage="<<c.rules.custom_start_garbage
      <<"\nvsync="<<c.vsync
      <<"\nfps="<<c.fps_cap
      <<"\ntournament="<<c.rules.tournament<<"\n";

@@ -21,6 +21,7 @@ struct RenderInfo {
 void renderGame(SDL_Renderer* r, Game& g, const RenderInfo& info);
 void renderMenu(SDL_Renderer* r, int selected, std::uint64_t seed, bool tournament, bool has_replay);
 void renderSettings(SDL_Renderer* r, const AppConfig& cfg, int selected);
+void renderCustomSetup(SDL_Renderer* r, const AppConfig& cfg, int selected);
 void renderControls(SDL_Renderer* r, const AppConfig& cfg, int selected, bool rebinding, bool waiting_pad);
 void renderSeedEntry(SDL_Renderer* r, const std::string& text, const std::string& error);
 void renderHelp(SDL_Renderer* r);

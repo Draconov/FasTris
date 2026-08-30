@@ -23,7 +23,7 @@ enum class Spin : std::uint8_t { None, Mini, Full };
 
 enum class ClearKind : std::uint8_t {
     None, Single, Double, Triple, Quad,
-    MiniNoLine, MiniSingle, TSpinNoLine, TSpinSingle, TSpinDouble, TSpinTriple
+    MiniNoLine, MiniSingle, MiniDouble, TSpinNoLine, TSpinSingle, TSpinDouble, TSpinTriple
 };
 
 struct Vec2 { int x{}; int y{}; };
@@ -46,6 +46,8 @@ struct Handling {
     bool ihs{true};
 };
 
+inline constexpr int kSimulationRulesVersion = 2;
+
 struct Rules {
     Handling handling{};
     bool ghost{true};
@@ -54,6 +56,15 @@ struct Rules {
     int garbage_cap{8};
     int garbage_delay_ms{500};
     int garbage_messiness_pct{25};
+
+    // Stored in replays so deterministic rules can evolve without breaking old runs.
+    int simulation_version{kSimulationRulesVersion};
+
+    // Custom / Sandbox mode only. Zero means disabled/endless.
+    int custom_gravity_ms{1000};
+    int custom_line_goal{0};
+    int custom_time_limit_s{0};
+    int custom_start_garbage{0};
 };
 
 struct Stats {
@@ -74,6 +85,9 @@ struct Stats {
     int b2b_chain{};
     int max_b2b{};
     int finesse_faults{};
+    int finesse_perfect_pieces{};
+    int finesse_streak{};
+    int max_finesse_streak{};
     int garbage_lines_cleared{};
     TimeUs elapsed_us{};
 };
