@@ -389,8 +389,19 @@ struct AppState {
         loadConfig(config_path, cfg);
         if (tournament) cfg.rules.tournament = true;
 
+        int initial_w = 1100;
+        int initial_h = 800;
+        SDL_Rect usable{};
+        const SDL_DisplayID primary = SDL_GetPrimaryDisplay();
+        if (primary != 0 && SDL_GetDisplayUsableBounds(primary, &usable)) {
+            initial_w = std::clamp(static_cast<int>(usable.w * 0.76f), 640, 1280);
+            initial_h = std::clamp(static_cast<int>(usable.h * 0.84f), 480, 900);
+            initial_w = std::min(initial_w, std::max(480, usable.w - 40));
+            initial_h = std::min(initial_h, std::max(360, usable.h - 40));
+        }
+
         const std::string title = std::string("FasTris ") + kVersion;
-        win = SDL_CreateWindow(title.c_str(), 960, 720,
+        win = SDL_CreateWindow(title.c_str(), initial_w, initial_h,
                                SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY);
         if (!win) {
             std::cerr << "SDL_CreateWindow failed: " << SDL_GetError() << "\n";
@@ -403,8 +414,18 @@ struct AppState {
             return false;
         }
 
-        SDL_SetRenderLogicalPresentation(ren, 960, 720, SDL_LOGICAL_PRESENTATION_LETTERBOX);
+        // Render directly to the real drawable size. The renderer computes a
+        // responsive canvas every frame, so widescreen/fullscreen windows use
+        // their extra space instead of being forced into a 4:3 letterbox.
         SDL_SetRenderDrawBlendMode(ren, SDL_BLENDMODE_BLEND);
+#if defined(__EMSCRIPTEN__)
+        // SDL 3.4+ can own the browser canvas size and emit resize events as
+        // the browser viewport changes. This keeps the web build genuinely
+        // responsive instead of merely CSS-scaling a fixed backbuffer.
+        SDL_SetWindowFillDocument(win, true);
+#else
+        SDL_SetWindowMinimumSize(win, 480, 360);
+#endif
         SDL_SetRenderVSync(ren, cfg.vsync ? 1 : 0);
 
         int pcount = 0;
