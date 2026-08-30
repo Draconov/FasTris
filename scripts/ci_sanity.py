@@ -54,7 +54,6 @@ for rel, needles in checks.items():
         if needle not in text:
             fail(f"{rel} is missing expected identity marker: {needle}")
 
-
 # CI regression checks for platform-specific failures seen on clean GitHub runners.
 build_workflow = (ROOT / ".github/workflows/build.yml").read_text(encoding="utf-8")
 release_workflow = (ROOT / ".github/workflows/release.yml").read_text(encoding="utf-8")
@@ -66,6 +65,15 @@ for name, workflow in [("build.yml", build_workflow), ("release.yml", release_wo
     if "lipo -verify_arch" in workflow:
         fail(f"{name} uses the fragile/incorrect lipo -verify_arch invocation; verify lipo -archs output instead")
 
+# Release jobs must not be skipped just because the current VERSION tag already exists.
+if "release_needed" in release_workflow:
+    fail("release.yml must rebuild/refresh the current VERSION release instead of gating jobs on release_needed")
+if "needs.version.outputs.release_needed" in release_workflow:
+    fail("release.yml still contains the old release-needed skip condition")
+if "git/refs/tags/$TAG" not in release_workflow or "-F force=true" not in release_workflow:
+    fail("release.yml must refresh an existing VERSION tag to the tested main commit")
+if "gh release upload \"$TAG\" dist/* --clobber" not in release_workflow:
+    fail("release.yml must replace existing release assets after a successful rebuild")
 
 # Distribution/readme regression checks.
 dependabot = (ROOT / ".github/dependabot.yml").read_text(encoding="utf-8")

@@ -3,7 +3,7 @@
 
 # FasTris
 
-**Low-latency deterministic falling-block game built for competitive play.**
+**Tetris built for competitive players.**
 
 [![Play Online](https://img.shields.io/badge/PLAY-ONLINE-14a8b2?style=for-the-badge&logo=github)](https://draconov.github.io/FasTris/)
 [![Download Windows](https://img.shields.io/badge/DOWNLOAD-WINDOWS-0078D6?style=for-the-badge&logo=windows11&logoColor=white)](https://github.com/Draconov/FasTris/releases/latest/download/FasTris-Windows-x64.zip)
