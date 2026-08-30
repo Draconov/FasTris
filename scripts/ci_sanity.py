@@ -30,6 +30,8 @@ required_files = [
     "CMakeLists.txt",
     ".github/workflows/build.yml",
     ".github/workflows/release.yml",
+    ".github/workflows/pages.yml",
+    ".github/dependabot.yml",
     "platform/android/app/build.gradle",
     "platform/android/app/src/main/AndroidManifest.xml",
     "platform/web/shell.html",
@@ -63,6 +65,40 @@ for name, workflow in [("build.yml", build_workflow), ("release.yml", release_wo
         fail(f"{name} must invoke prepare_sdl_android.sh through bash so Git file-mode loss cannot break Android CI")
     if "lipo -verify_arch" in workflow:
         fail(f"{name} uses the fragile/incorrect lipo -verify_arch invocation; verify lipo -archs output instead")
+
+
+# Distribution/readme regression checks.
+dependabot = (ROOT / ".github/dependabot.yml").read_text(encoding="utf-8")
+if 'groups:' not in dependabot or 'patterns:' not in dependabot or '- "*"' not in dependabot:
+    fail("Dependabot GitHub Actions updates must remain grouped into one PR")
+if "open-pull-requests-limit: 1" not in dependabot:
+    fail("Dependabot GitHub Actions updates should be limited to one open PR")
+
+pages_workflow = (ROOT / ".github/workflows/pages.yml").read_text(encoding="utf-8")
+for needle in ["actions/deploy-pages@", "actions/upload-pages-artifact@", "build-web/index.wasm"]:
+    if needle not in pages_workflow:
+        fail(f"pages.yml is missing required Pages deployment marker: {needle}")
+
+for alias in [
+    "FasTris-Windows-x64.zip",
+    "FasTris-Linux-x86_64.tar.gz",
+    "FasTris-macOS-universal.zip",
+    "FasTris-Web.zip",
+    "FasTris-Android.apk",
+]:
+    if alias not in release_workflow:
+        fail(f"release.yml is missing stable latest-download asset alias: {alias}")
+
+readme = (ROOT / "README.md").read_text(encoding="utf-8")
+for needle in [
+    "https://draconov.github.io/FasTris/",
+    "releases/latest/download/FasTris-Windows-x64.zip",
+    "releases/latest/download/FasTris-Linux-x86_64.tar.gz",
+    "releases/latest/download/FasTris-macOS-universal.zip",
+    "releases/latest/download/FasTris-Android.apk",
+]:
+    if needle not in readme:
+        fail(f"README.md is missing expected distribution badge target: {needle}")
 
 if errors:
     for error in errors:

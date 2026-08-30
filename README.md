@@ -1,8 +1,29 @@
+<div align="center">
+  <img src="assets/icon/icon.png" width="128" height="128" alt="FasTris icon">
+
 # FasTris
 
-FasTris is a native C++20 and SDL3 falling-block game built for low latency, deterministic competition, reproducible seeds, and modern tetromino mechanics.
+**Low-latency deterministic falling-block game built for competitive play.**
 
-Gameplay simulation is independent from rendering. A run can be reproduced from its seed, rules, and timestamped input events regardless of monitor refresh rate or render FPS.
+[![Play Online](https://img.shields.io/badge/PLAY-ONLINE-14a8b2?style=for-the-badge&logo=github)](https://draconov.github.io/FasTris/)
+[![Download Windows](https://img.shields.io/badge/DOWNLOAD-WINDOWS-0078D6?style=for-the-badge&logo=windows11&logoColor=white)](https://github.com/Draconov/FasTris/releases/latest/download/FasTris-Windows-x64.zip)
+[![Download Linux](https://img.shields.io/badge/DOWNLOAD-LINUX-FCC624?style=for-the-badge&logo=linux&logoColor=000000)](https://github.com/Draconov/FasTris/releases/latest/download/FasTris-Linux-x86_64.tar.gz)
+[![Download macOS](https://img.shields.io/badge/DOWNLOAD-macOS-000000?style=for-the-badge&logo=apple&logoColor=white)](https://github.com/Draconov/FasTris/releases/latest/download/FasTris-macOS-universal.zip)
+[![Download Android](https://img.shields.io/badge/DOWNLOAD-ANDROID-3DDC84?style=for-the-badge&logo=android&logoColor=white)](https://github.com/Draconov/FasTris/releases/latest/download/FasTris-Android.apk)
+
+[![Build](https://github.com/Draconov/FasTris/actions/workflows/build.yml/badge.svg)](https://github.com/Draconov/FasTris/actions/workflows/build.yml)
+[![Web](https://github.com/Draconov/FasTris/actions/workflows/pages.yml/badge.svg)](https://github.com/Draconov/FasTris/actions/workflows/pages.yml)
+[![Latest Release](https://img.shields.io/github/v/release/Draconov/FasTris?label=release)](https://github.com/Draconov/FasTris/releases/latest)
+
+</div>
+
+---
+
+## About
+
+FasTris is a native C++20 and SDL3 falling-block game built around low input latency, deterministic competition, reproducible seeds, and modern tetromino mechanics.
+
+Gameplay simulation is independent from rendering. The same seed, rules, and timestamped inputs reproduce the same run regardless of monitor refresh rate or render FPS.
 
 ## Highlights
 
@@ -47,13 +68,13 @@ Start a Sprint run with an exact seed:
 FasTris --seed 123456789 --mode sprint
 ```
 
-Inspect a deterministic piece sequence without launching the SDL client:
+Inspect its deterministic piece sequence without launching the SDL client:
 
 ```bash
 fastris_sequence 123456789 70
 ```
 
-Run the same daily Seed Race as every other client using the same rules:
+Run a daily Seed Race:
 
 ```bash
 FasTris --daily 2026-08-30 --mode seedrace
@@ -61,19 +82,19 @@ FasTris --daily 2026-08-30 --mode seedrace
 
 ## Replays
 
-Completed runs are saved as deterministic replay data rather than video. A replay stores the seed, rules, handling, timestamped inputs, duration, and final state hash.
+Completed runs are stored as deterministic replay data rather than video. A replay contains the seed, rules, handling, timestamped inputs, duration, and final state hash.
 
-Verify a replay independently:
+Verify one independently:
 
 ```bash
 fastris_verify replays/last.ftr
 ```
 
-Replay format details are documented in [`docs/REPLAY_FORMAT.md`](docs/REPLAY_FORMAT.md).
+See [`docs/REPLAY_FORMAT.md`](docs/REPLAY_FORMAT.md) for the replay format.
 
 ## Build
 
-FasTris uses CMake and SDL3. The default native build downloads the pinned SDL3 source dependency automatically on first configure.
+FasTris uses CMake and SDL3. Native builds download the pinned SDL3 source dependency automatically on first configure.
 
 ### Windows
 
@@ -95,7 +116,7 @@ ctest --test-dir build --output-on-failure
 ./build/FasTris
 ```
 
-Some distributions require the usual SDL X11 or Wayland development packages.
+Some distributions require SDL X11 or Wayland development packages.
 
 ### macOS
 
@@ -124,11 +145,9 @@ Serve `build-web/` through a local HTTP server and open `index.html`.
 
 ### Android
 
-Android builds use the Gradle project in `platform/android/`. Release signing and local Android requirements are covered in the release documentation.
+Android builds use the Gradle project in `platform/android/`. Release signing and local Android requirements are documented in [`docs/RELEASING.md`](docs/RELEASING.md).
 
 ### Core and tools only
-
-For headless verification, testing, or backend use:
 
 ```bash
 cmake -S . -B build-core -DFASTTRIS_BUILD_APP=OFF -DCMAKE_BUILD_TYPE=Release
@@ -140,23 +159,13 @@ This configuration does not require SDL.
 
 ## Versioning and releases
 
-The root [`VERSION`](VERSION) file is the single source of truth for the game version.
+[`VERSION`](VERSION) is the single source of truth for the game version. Change that file and push to `main`; GitHub Actions builds Windows, Linux, macOS, Web, and Android packages and publishes the corresponding release after all required jobs succeed.
 
-To prepare a new release, change only that version number and push the release commit to `main`. GitHub Actions builds Windows, Linux, macOS, Web, and Android packages and publishes the corresponding `vX.Y.Z` release only after all required jobs succeed.
+## Online multiplayer
 
-Full release and Android signing instructions are in [`docs/RELEASING.md`](docs/RELEASING.md).
+The repository contains deterministic battle and garbage simulation suitable for authoritative netcode. A production matchmaking and ranked backend is not included yet; the intended networking model is described in [`docs/NETCODE.md`](docs/NETCODE.md).
 
-## Icon
-
-The master icon location is:
-
-```text
-assets/icon/icon.png
-```
-
-A placeholder is included so the path already exists. Replace that file with the final square PNG when the artwork is ready. A 1024x1024 RGBA source is recommended.
-
-## Repository layout
+## Project structure
 
 ```text
 FasTris/
@@ -170,19 +179,5 @@ FasTris/
 |-- docs/                 Architecture, replay, netcode, and release docs
 |-- assets/icon/          Master application icon
 |-- VERSION               Application version
-`-- .github/workflows/    CI and release automation
+`-- .github/workflows/    CI, Pages, and release automation
 ```
-
-## Online multiplayer
-
-The repository contains deterministic battle and garbage simulation suitable for authoritative netcode, but it does not include a production matchmaking or ranked backend. The intended networking model is documented in [`docs/NETCODE.md`](docs/NETCODE.md).
-
-## Testing
-
-Run the complete configured test suite with:
-
-```bash
-ctest --test-dir build --output-on-failure
-```
-
-Architecture details are available in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).

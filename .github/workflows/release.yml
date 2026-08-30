@@ -337,6 +337,21 @@ jobs:
           test -s "dist/FasTris-v${version}-macos-universal.zip"
           test -s "dist/FasTris-v${version}-web.zip"
           compgen -G "dist/FasTris-v${version}-android*.apk" >/dev/null
+      - name: Create stable latest-download aliases
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${{ needs.version.outputs.version }}"
+          cp "dist/FasTris-v${version}-windows-x64.zip" "dist/FasTris-Windows-x64.zip"
+          cp "dist/FasTris-v${version}-linux-x86_64.tar.gz" "dist/FasTris-Linux-x86_64.tar.gz"
+          cp "dist/FasTris-v${version}-macos-universal.zip" "dist/FasTris-macOS-universal.zip"
+          cp "dist/FasTris-v${version}-web.zip" "dist/FasTris-Web.zip"
+          android_apk="$(find dist -maxdepth 1 -type f -name "FasTris-v${version}-android*.apk" -print -quit)"
+          if [[ -z "$android_apk" ]]; then
+            echo "No Android APK is available for the stable alias." >&2
+            exit 1
+          fi
+          cp "$android_apk" "dist/FasTris-Android.apk"
       - name: Create checksums
         shell: bash
         working-directory: dist
