@@ -56,7 +56,7 @@ struct Rules {
     int garbage_delay_ms{500};
     int garbage_messiness_pct{25};
 
-    // Custom / Sandbox mode only. Zero means disabled/endless.
+    // Sandbox mode only. Zero means disabled/endless.
     int custom_gravity_ms{1000};
     int custom_line_goal{0};
     int custom_time_limit_s{0};
@@ -110,7 +110,7 @@ inline constexpr std::string_view modeName(Mode m) {
         case Mode::Sprint40: return "Sprint 40L"; case Mode::Ultra120: return "Ultra 2:00";
         case Mode::Marathon: return "Marathon"; case Mode::Zen: return "Zen";
         case Mode::Cheese40: return "Cheese 40"; case Mode::Finesse: return "Finesse";
-        case Mode::SeedRace: return "Seed Race"; case Mode::Custom: return "Custom";
+        case Mode::SeedRace: return "Seed Race"; case Mode::Custom: return "Sandbox";
     }
     return "Unknown";
 }

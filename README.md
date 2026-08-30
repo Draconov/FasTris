@@ -29,13 +29,13 @@ Gameplay simulation is independent from rendering. The same seed, rules, and tim
 ## Highlights
 
 - Deterministic PCG32 RNG with a modern 7-bag randomizer
-- Editable 64-bit seeds and daily seeded challenges
+- Editable 64-bit seeds in Settings and daily seeded challenges
 - SRS-style rotation with clockwise, counter-clockwise, and optional 180-degree rotation
 - Hold, ghost piece, hard drop, soft drop, and sonic drop
 - Configurable DAS, ARR, SDF, DCD, IRS, IHS, lock delay, and lock resets
 - T-Spins, T-Spin Minis, Back-to-Back, combos, Perfect Clears, and attack calculation
 - Deterministic garbage, cancellation, delay, cap, and two-player battle simulation
-- Sprint, Ultra, Marathon, Zen, Cheese Race, Finesse, Seed Race, and Custom modes
+- Sprint, Ultra, Marathon, Zen, Cheese Race, Finesse, Seed Race, and Sandbox modes
 - Live PPS, APM, KPP, attack, combo, B2B, T-Spin, Perfect Clear, and finesse statistics
 - Deterministic replay recording, playback, SHA-256 verification, and a headless verifier
 - Keyboard and gamepad rebinding
@@ -59,7 +59,7 @@ Gameplay simulation is independent from rendering. The same seed, rules, and tim
 | Save replay | F6 | Not assigned |
 | Fullscreen | F11 | Not assigned |
 
-Gameplay bindings can be changed from the Controls / Rebind menu.
+Gameplay bindings can be changed from **Settings -> Controls**, which also includes a dedicated Reset Controls action.
 
 ## Seeds and deterministic runs
 

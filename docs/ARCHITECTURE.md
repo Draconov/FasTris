@@ -30,7 +30,7 @@ Scheduled events include:
 - gravity ticks
 - DAS expiry / ARR repeat
 - lock deadline
-- Ultra / Custom mode timeout
+- Ultra / Sandbox mode timeout
 
 When multiple simulation events have the same timestamp, the engine resolves them in a deterministic order.
 

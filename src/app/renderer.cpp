@@ -145,7 +145,11 @@ void renderGame(SDL_Renderer*r,Game&g,const RenderInfo&i){
         }
     }
 
-    txt(r,stats_x,by+380,"INPUT",{145,155,170,255},true);int row=0;for(auto it=i.recent_inputs.rbegin();it!=i.recent_inputs.rend()&&row<7;++it,++row)actionLabel(r,stats_x,by+415+row*18,*it);
+    if(i.show_inputs){
+        txt(r,stats_x,by+380,"INPUT",{145,155,170,255},true);
+        int row=0;
+        for(auto it=i.recent_inputs.rbegin();it!=i.recent_inputs.rend()&&row<7;++it,++row)actionLabel(r,stats_x,by+415+row*18,*it);
+    }
     txt(r,stats_x,by+580,"F5 restart  F6 save replay",{120,130,145,255});txt(r,stats_x,by+598,"P pause  ESC menu",{120,130,145,255});
     if(i.replay_mode){txtf(r,next_x,by+586,{125,220,170,255},"REPLAY %.1fx%s",i.replay_speed,i.replay_paused?" PAUSED":"");txt(r,next_x,by+604,"SPACE pause  arrows seek",{120,130,145,255});}
     if(!i.status.empty())txt(r,bx,by+620,i.status,{120,220,160,255},true);
@@ -186,23 +190,37 @@ void renderGame(SDL_Renderer*r,Game&g,const RenderInfo&i){
     }
 }
 
-void renderMenu(SDL_Renderer*r,int sel,std::uint64_t seed,bool tournament){
+void renderMenu(SDL_Renderer*r,int sel,bool tournament){
     beginCanvas(r,true);
-    set(r,{11,14,20,255});SDL_RenderClear(r);txt(r,350,45,"FASTRIS",{235,240,248,255},true);txt(r,454,50,std::string("v")+fasttris::kVersion,{120,135,155,255});txt(r,276,78,"DETERMINISTIC COMPETITIVE BLOCK ENGINE",{120,135,155,255});
-    static const std::array<const char*,12> items={"SPRINT 40L","ULTRA 2:00","MARATHON 150L","ZEN / ENDLESS","CHEESE RACE 40","FINESSE TRAINER","SEED RACE 40L","CUSTOM / SANDBOX","SETTINGS","CONTROLS / REBIND","REPLAYS","QUIT"};
-    for(int n=0;n<(int)items.size();++n){C c=n==sel?C{120,220,255,255}:C{205,210,220,255};std::string pre=n==sel?"> ":"  ";txt(r,310,122+n*31,pre+items[n],c,true);}
+    set(r,{11,14,20,255});SDL_RenderClear(r);
+    txt(r,350,45,"FASTRIS",{235,240,248,255},true);
+    txt(r,454,50,std::string("v")+fasttris::kVersion,{120,135,155,255});
+    txt(r,276,78,"DETERMINISTIC COMPETITIVE BLOCK ENGINE",{120,135,155,255});
+    static const std::array<const char*,11> items={
+        "SPRINT 40L","ULTRA 2:00","MARATHON 150L","ZEN","CHEESE RACE 40",
+        "FINESSE TRAINER","SEED RACE 40L","SANDBOX","SETTINGS","REPLAYS","QUIT"
+    };
+    for(int n=0;n<(int)items.size();++n){
+        C c=n==sel?C{120,220,255,255}:C{205,210,220,255};
+        txt(r,310,122+n*34,(n==sel?"> ":"  ")+std::string(items[n]),c,true);
+    }
     static const std::array<const char*,8> desc={
         "Clear 40 lines as fast as possible.",
         "Score as high as possible in exactly two minutes.",
         "Clear 150 lines while gravity increases every 10 lines.",
-        "Relaxed endless practice with no automatic gravity.",
+        "Relaxed practice with no automatic gravity.",
         "Clear 40 garbage lines while the cheese replenishes.",
         "No-gravity technique trainer; minimize finesse faults.",
         "Standardized 40L rules; same seed means the same piece order.",
         "Configure gravity, goals, timer and starting garbage."
     };
-    if(sel<8){txt(r,245,510,"MODE",{120,135,155,255},true);txt(r,245,536,desc[sel],{190,198,210,255});}
-    txtf(r,245,580,{165,175,190,255},"SEED: %llu",(unsigned long long)seed);txt(r,245,600,"E enter seed   R random seed",{130,140,155,255});txt(r,245,620,"T tournament lock",{130,140,155,255});txt(r,435,620,tournament?"ON":"OFF",tournament?C{110,230,160,255}:C{170,175,185,255});txt(r,245,648,"ENTER select   arrows navigate   H help",{130,140,155,255});
+    if(sel<8){
+        txt(r,245,520,"MODE",{120,135,155,255},true);
+        txt(r,245,546,desc[sel],{190,198,210,255});
+    }
+    txt(r,245,600,"Tournament lock",{130,140,155,255});
+    txt(r,385,600,tournament?"ON":"OFF",tournament?C{110,230,160,255}:C{170,175,185,255});
+    txt(r,245,632,"ENTER select   arrows navigate   H help",{130,140,155,255});
 }
 
 void renderReplayMenu(SDL_Renderer*r,int sel,bool hasLast,const std::string&status){
@@ -222,36 +240,59 @@ void renderReplayMenu(SDL_Renderer*r,int sel,bool hasLast,const std::string&stat
     txt(r,250,610,"UP/DOWN select   ENTER open   ESC back",{135,145,160,255});
 }
 
-void renderSettings(SDL_Renderer*r,const AppConfig&c,int sel){
+void renderSettings(SDL_Renderer*r,const AppConfig&c,std::uint64_t seed,int sel,bool editing,const std::string&editText,const std::string&status){
     beginCanvas(r,true);
-    set(r,{11,14,20,255});SDL_RenderClear(r);txt(r,330,28,"SETTINGS",{235,240,248,255},true);
-    auto h=c.rules.handling;bool ghost=c.rules.ghost;int next=c.rules.next_count;
-    if(c.rules.tournament){h.lock_delay_ms=500;h.max_lock_resets=15;h.allow_180=false;h.irs=true;h.ihs=true;ghost=true;next=5;}
-    std::array<std::string,14> v={
-        "DAS       "+std::to_string(h.das_ms)+" ms",
-        "ARR       "+std::to_string(h.arr_ms)+" ms"+(h.arr_ms==0?" (INSTANT)":""),
-        "SDF       "+std::to_string(h.sdf)+"x"+(h.sdf==0?" (SONIC)":""),
-        "DCD       "+std::to_string(h.dcd_ms)+" ms",
-        "LOCK      "+std::to_string(h.lock_delay_ms)+" ms",
-        "RESETS    "+std::to_string(h.max_lock_resets),
-        std::string("180 ROT   ")+(h.allow_180?"ON":"OFF"),
-        std::string("IRS       ")+(h.irs?"ON":"OFF"),
-        std::string("IHS       ")+(h.ihs?"ON":"OFF"),
-        std::string("GHOST     ")+(ghost?"ON":"OFF"),
-        "NEXT      "+std::to_string(next),
-        std::string("VSYNC     ")+(c.vsync?"ON":"OFF"),
-        "FPS CAP   "+std::string(c.fps_cap==0?"UNCAPPED":std::to_string(c.fps_cap)),
+    set(r,{11,14,20,255});SDL_RenderClear(r);
+    txt(r,330,18,"SETTINGS",{235,240,248,255},true);
+
+    auto h=c.rules.handling;
+    bool ghost=c.rules.ghost;
+    int next=c.rules.next_count;
+    if(c.rules.tournament){
+        h.lock_delay_ms=500;h.max_lock_resets=15;h.allow_180=false;h.irs=true;h.ihs=true;ghost=true;next=5;
+    }
+
+    const bool blink=(SDL_GetTicks()/350)%2==0;
+    auto number=[&](int item,const std::string&normal){
+        if(!editing||sel!=item)return normal;
+        return std::string("[")+(blink?editText:std::string(editText.size(),' '))+(blink?"_":" ")+"]";
+    };
+
+    std::array<std::string,SettingCount> v={
+        "DAS             "+number(SettingDas,std::to_string(h.das_ms))+" ms",
+        "ARR             "+number(SettingArr,std::to_string(h.arr_ms))+" ms"+(h.arr_ms==0&&!(editing&&sel==SettingArr)?" (INSTANT)":""),
+        "SDF             "+number(SettingSdf,std::to_string(h.sdf))+"x"+(h.sdf==0&&!(editing&&sel==SettingSdf)?" (SONIC)":""),
+        "DCD             "+number(SettingDcd,std::to_string(h.dcd_ms))+" ms",
+        "LOCK            "+number(SettingLock,std::to_string(h.lock_delay_ms))+" ms",
+        "RESETS          "+number(SettingResets,std::to_string(h.max_lock_resets)),
+        std::string("180 ROT         ")+(h.allow_180?"ON":"OFF"),
+        std::string("IRS             ")+(h.irs?"ON":"OFF"),
+        std::string("IHS             ")+(h.ihs?"ON":"OFF"),
+        std::string("GHOST           ")+(ghost?"ON":"OFF"),
+        "NEXT            "+number(SettingNext,std::to_string(next)),
+        std::string("SHOW INPUTS     ")+(c.show_inputs?"ON":"OFF"),
+        std::string("VSYNC           ")+(c.vsync?"ON":"OFF"),
+        "FPS CAP         "+number(SettingFpsCap,c.fps_cap==0?"0":std::to_string(c.fps_cap))+(c.fps_cap==0&&!(editing&&sel==SettingFpsCap)?" (UNCAPPED)":""),
+        std::string("TOURNAMENT      ")+(c.rules.tournament?"ON":"OFF"),
+        "SEED            "+number(SettingSeed,std::to_string(seed)),
+        "RANDOMIZE SEED",
+        "CONTROLS",
+        "MISCELLANEOUS",
         "RESET SETTINGS"
     };
-    for(int n=0;n<(int)v.size();++n){
-        const bool locked=c.rules.tournament&&n>=4&&n<=10;
-        const C normal=n==13?C{245,180,110,255}:C{210,215,225,255};
+
+    for(int n=0;n<SettingCount;++n){
+        const bool locked=c.rules.tournament&&n>=SettingLock&&n<=SettingNext;
+        const bool action=n>=SettingRandomSeed;
+        C normal=action?C{190,198,210,255}:C{210,215,225,255};
+        if(n==SettingReset)normal={245,180,110,255};
         std::string label=(n==sel?"> ":"  ")+v[n]+(locked?"  [LOCKED]":"");
-        txt(r,270,70+n*30,label,n==sel?C{120,220,255,255}:locked?C{150,150,155,255}:normal,true);
+        txt(r,238,54+n*25,label,n==sel?C{120,220,255,255}:locked?C{150,150,155,255}:normal,true);
     }
-    static const std::array<const char*,14> hint={
-        "DAS: delay before a held horizontal key starts repeating.",
-        "ARR: horizontal repeat interval after DAS. 0 intentionally shifts to the wall.",
+
+    static const std::array<const char*,SettingCount> hint={
+        "DAS: delay before held horizontal movement begins repeating.",
+        "ARR: repeat interval after DAS. 0 intentionally shifts to the wall.",
         "SDF: soft-drop speed multiplier. 0 performs a sonic drop.",
         "DCD: reduces DAS charge when changing horizontal direction.",
         "Lock delay before a grounded piece locks.",
@@ -261,18 +302,26 @@ void renderSettings(SDL_Renderer*r,const AppConfig&c,int sel){
         "IHS: held Hold is applied to the next spawning piece.",
         "Show or hide the landing ghost.",
         "Number of upcoming pieces displayed, from 1 to 8.",
+        "Show or hide the live input history while playing and watching replays.",
         "Synchronize presentation to the display refresh.",
-        "Render cap when VSync is disabled. 0 means uncapped.",
-        "Restore gameplay, display and Custom-mode settings. Key bindings stay unchanged."
+        "Render cap when VSync is disabled. Enter 0 for uncapped.",
+        "Apply the locked competitive ruleset during runs.",
+        "Piece-sequence seed. Press Enter and type an exact unsigned 64-bit value.",
+        "Generate a new random piece-sequence seed.",
+        "Open the dedicated keyboard and gamepad rebinding screen.",
+        "Future graphics area for shaders, textures and palettes.",
+        "Restore gameplay/display preferences. Seed and controls stay unchanged."
     };
-    if(c.rules.tournament)txt(r,245,505,"TOURNAMENT LOCK: fixed competitive values apply during runs",{255,190,100,255});
-    txt(r,245,545,hint[std::clamp(sel,0,13)],{150,165,182,255});
-    txt(r,245,610,sel==13?"ENTER reset settings   ESC saves + back":"LEFT/RIGHT change   ESC saves + back",{135,145,160,255});
+
+    if(c.rules.tournament)txt(r,220,560,"TOURNAMENT LOCK: placement rules marked [LOCKED] are fixed during runs",{255,190,100,255});
+    if(!status.empty())txt(r,220,586,status,{255,205,100,255},true);
+    txt(r,220,612,hint[std::clamp(sel,0,SettingCount-1)],{150,165,182,255});
+    txt(r,220,646,editing?"TYPE NUMBER   ENTER apply   ESC cancel":"ENTER edit/open/toggle   LEFT/RIGHT change   ESC save + back",{135,145,160,255});
 }
 
-void renderCustomSetup(SDL_Renderer*r,const AppConfig&c,int sel){
+void renderSandboxSetup(SDL_Renderer*r,const AppConfig&c,int sel){
     beginCanvas(r,true);
-    set(r,{11,14,20,255});SDL_RenderClear(r);txt(r,310,55,"CUSTOM / SANDBOX",{235,240,248,255},true);
+    set(r,{11,14,20,255});SDL_RenderClear(r);txt(r,350,55,"SANDBOX",{235,240,248,255},true);
     const auto& q=c.rules;
     auto gravity=q.custom_gravity_ms==0?std::string("OFF"):std::to_string(q.custom_gravity_ms)+" ms/cell";
     auto lines=q.custom_line_goal==0?std::string("ENDLESS"):std::to_string(q.custom_line_goal);
@@ -285,7 +334,7 @@ void renderCustomSetup(SDL_Renderer*r,const AppConfig&c,int sel){
         "START RUN"
     };
     for(int n=0;n<(int)items.size();++n){txt(r,290,160+n*62,(n==sel?"> ":"  ")+items[n],n==sel?C{120,220,255,255}:C{210,215,225,255},true);}
-    txt(r,230,500,"Custom runs are deterministic: the seed controls pieces and starting garbage.",{155,168,185,255});
+    txt(r,230,500,"Sandbox runs are deterministic: the seed controls pieces and starting garbage.",{155,168,185,255});
     txt(r,230,530,"Gravity 0 disables automatic fall. Goal/time 0 means endless/off.",{155,168,185,255});
     txt(r,230,590,"UP/DOWN select   LEFT/RIGHT change",{135,145,160,255});
     txt(r,230,612,"ENTER start   ESC back",{135,145,160,255});
@@ -293,9 +342,41 @@ void renderCustomSetup(SDL_Renderer*r,const AppConfig&c,int sel){
 
 void renderControls(SDL_Renderer*r,const AppConfig&c,int sel,bool rebinding,bool waitpad){
     beginCanvas(r,true);
-    set(r,{11,14,20,255});SDL_RenderClear(r);txt(r,330,40,"CONTROLS",{235,240,248,255},true);for(int n=0;n<8;++n){auto a=static_cast<Action>(n);std::ostringstream s;s<<actionName(a)<<"   KEY "<<SDL_GetKeyName(c.keys[n])<<"   PAD "<<padName(c.pads[n]);txt(r,220,115+n*55,(n==sel?"> ":"  ")+s.str(),n==sel?C{120,220,255,255}:C{210,215,225,255},true);}if(rebinding)txt(r,225,590,waitpad?"PRESS A GAMEPAD BUTTON (ESC CANCELS)":"PRESS A KEY (G = BIND GAMEPAD INSTEAD)",{255,205,100,255},true);else txt(r,225,590,"ENTER rebind keyboard   G rebind gamepad   ESC back",{135,145,160,255});
+    set(r,{11,14,20,255});SDL_RenderClear(r);
+    txt(r,330,30,"CONTROLS",{235,240,248,255},true);
+    for(int n=0;n<static_cast<int>(Action::Count);++n){
+        auto a=static_cast<Action>(n);
+        std::ostringstream line;
+        line<<actionName(a)<<"   KEY "<<SDL_GetKeyName(c.keys[n])<<"   PAD "<<padName(c.pads[n]);
+        txt(r,205,82+n*44,(n==sel?"> ":"  ")+line.str(),n==sel?C{120,220,255,255}:C{210,215,225,255},true);
+    }
+    txt(r,205,82+kControlResetIndex*44,(sel==kControlResetIndex?"> ":"  ")+std::string("RESET CONTROLS"),
+        sel==kControlResetIndex?C{120,220,255,255}:C{245,180,110,255},true);
+    if(rebinding){
+        txt(r,205,590,waitpad?"PRESS A GAMEPAD BUTTON (ESC CANCELS)":"PRESS A KEY (G = BIND GAMEPAD INSTEAD)",{255,205,100,255},true);
+    }else if(sel==kControlResetIndex){
+        txt(r,205,590,"ENTER restore default keyboard + gamepad bindings   ESC back",{135,145,160,255});
+    }else{
+        txt(r,205,590,"ENTER rebind keyboard   G rebind gamepad   ESC back",{135,145,160,255});
+    }
 }
-void renderSeedEntry(SDL_Renderer*r,const std::string&t,const std::string&e){beginCanvas(r,true);set(r,{11,14,20,255});SDL_RenderClear(r);txt(r,315,210,"ENTER 64-BIT SEED",{235,240,248,255},true);outline(r,245,280,470,70,{80,95,120,255});txt(r,270,302,t.empty()?"_":t,{120,220,255,255},true);if(!e.empty())txt(r,270,380,e,{255,110,110,255});txt(r,270,420,"ENTER accept   ESC cancel",{135,145,160,255});}
-void renderHelp(SDL_Renderer*r){beginCanvas(r,true);set(r,{11,14,20,255});SDL_RenderClear(r);txt(r,360,35,"HELP",{235,240,248,255},true);std::array<const char*,17> l={"Gameplay uses SDL event nanosecond timestamps.","OS key repeat is ignored; DAS/ARR are engine-driven.","Same seed + rules + input events = same simulation.","","Default keys:","Arrows: left/right/down    Space: hard drop","Up: rotate CW             Z: rotate CCW","A: rotate 180             C: hold","P: pause                  F5: restart","F6: save replay to file   ESC: menu","","Replay viewer:","Space pause, Left/Right seek 1 second","1/2/4/8 speed, N next piece, F6 save copy","","Command line: --seed N --mode sprint --replay file","--verify file --tournament --help"};for(int n=0;n<(int)l.size();++n)txt(r,160,105+n*30,l[n],{190,198,210,255},n<3);txt(r,160,660,"ESC back",{130,140,155,255});}
+
+void renderMiscellaneous(SDL_Renderer*r){
+    beginCanvas(r,true);
+    set(r,{11,14,20,255});SDL_RenderClear(r);
+    txt(r,300,70,"MISCELLANEOUS",{235,240,248,255},true);
+    txt(r,265,180,"GRAPHICS",{145,155,170,255},true);
+    txt(r,265,230,"SHADERS",{210,215,225,255},true);
+    txt(r,520,230,"FUTURE",{120,135,155,255});
+    txt(r,265,285,"TEXTURES",{210,215,225,255},true);
+    txt(r,520,285,"FUTURE",{120,135,155,255});
+    txt(r,265,340,"PALETTES",{210,215,225,255},true);
+    txt(r,520,340,"FUTURE",{120,135,155,255});
+    txt(r,265,425,"This section is reserved for visual customization.",{155,168,185,255});
+    txt(r,265,455,"Gameplay-affecting rules will stay outside graphics settings.",{155,168,185,255});
+    txt(r,265,610,"ESC back to Settings",{135,145,160,255});
+}
+
+void renderHelp(SDL_Renderer*r){beginCanvas(r,true);set(r,{11,14,20,255});SDL_RenderClear(r);txt(r,360,35,"HELP",{235,240,248,255},true);std::array<const char*,17> l={"Gameplay uses SDL event nanosecond timestamps.","OS key repeat is ignored; DAS/ARR are engine-driven.","Same seed + rules + input events = same simulation.","","Default keys:","Arrows: left/right/down    Space: hard drop","Up: rotate CW             Z: rotate CCW","A: rotate 180             C: hold","P: pause                  F5: restart","F6: save replay to file   ESC: menu","","Replay viewer:","Space pause, Left/Right seek 1 second","1/2/4/8 speed, N next piece, F6 save copy","","Seed and control rebinding are available from Settings.","Command line: --seed N --mode sprint --replay file"};for(int n=0;n<(int)l.size();++n)txt(r,160,105+n*30,l[n],{190,198,210,255},n<3);txt(r,160,660,"ESC back",{130,140,155,255});}
 
 } // namespace fasttris::app

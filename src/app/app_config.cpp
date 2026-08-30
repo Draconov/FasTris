@@ -51,6 +51,7 @@ bool loadConfig(const std::string&path,AppConfig&c){
             else if(k=="customtime")c.rules.custom_time_limit_s=n;
             else if(k=="customgarbage")c.rules.custom_start_garbage=n;
             else if(k=="vsync")c.vsync=n!=0;
+            else if(k=="showinputs")c.show_inputs=n!=0;
             else if(k=="fps")c.fps_cap=n;
             else if(k=="tournament")c.rules.tournament=n!=0;
             else if(k.rfind("key",0)==0){int i=std::stoi(k.substr(3));if(i>=0&&i<(int)c.keys.size())c.keys[i]=static_cast<SDL_Keycode>(n);}
@@ -78,6 +79,7 @@ bool saveConfig(const std::string&path,const AppConfig&c){
      <<"\ncustomtime="<<c.rules.custom_time_limit_s
      <<"\ncustomgarbage="<<c.rules.custom_start_garbage
      <<"\nvsync="<<c.vsync
+     <<"\nshowinputs="<<c.show_inputs
      <<"\nfps="<<c.fps_cap
      <<"\ntournament="<<c.rules.tournament<<"\n";
     for(std::size_t i=0;i<c.keys.size();++i)f<<"key"<<i<<'='<<static_cast<long long>(c.keys[i])<<"\n";
@@ -89,7 +91,13 @@ void resetSettings(AppConfig& c){
     const AppConfig defaults=defaultConfig();
     c.rules=defaults.rules;
     c.vsync=defaults.vsync;
+    c.show_inputs=defaults.show_inputs;
     c.fps_cap=defaults.fps_cap;
+}
+void resetControls(AppConfig& c){
+    const AppConfig defaults=defaultConfig();
+    c.keys=defaults.keys;
+    c.pads=defaults.pads;
 }
 const char* padName(int b){
     switch(static_cast<SDL_GamepadButton>(b)){

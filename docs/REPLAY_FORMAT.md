@@ -24,6 +24,6 @@ Times are integer microseconds from the start of the simulated run, excluding pa
 
 FasTris intentionally supports only the current replay layout. The loader requires the current field set and rejects missing or unknown fields instead of maintaining legacy replay behavior.
 
-Custom-mode settings are stored in the replay as well, including gravity, line goal, time limit, and starting garbage.
+Sandbox-mode settings are stored in the replay as well, including gravity, line goal, time limit, and starting garbage.
 
 The final hash is SHA-256 over the current canonical deterministic-state serialization. A verifier rebuilds the run from the replay and compares the hash.

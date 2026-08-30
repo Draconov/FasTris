@@ -15,6 +15,7 @@
 #include <filesystem>
 #include <iostream>
 #include <memory>
+#include <limits>
 #include <mutex>
 #include <optional>
 #include <random>
@@ -26,7 +27,7 @@ using namespace fasttris;
 using namespace fasttris::app;
 
 namespace {
-enum class Screen { Menu, Game, Settings, Controls, SeedEntry, Help, Replay, ReplayMenu, CustomSetup };
+enum class Screen { Menu, Game, Settings, Controls, Miscellaneous, Help, Replay, ReplayMenu, SandboxSetup };
 
 std::uint64_t randomSeed() {
     std::random_device rd;
@@ -50,7 +51,7 @@ bool parseMode(const std::string& s, Mode& mode) {
     else if (s == "cheese") mode = Mode::Cheese40;
     else if (s == "finesse") mode = Mode::Finesse;
     else if (s == "seedrace") mode = Mode::SeedRace;
-    else if (s == "custom") mode = Mode::Custom;
+    else if (s == "sandbox") mode = Mode::Custom;
     else return false;
     return true;
 }
@@ -341,7 +342,7 @@ void printHelp() {
         << "  --version\n"
         << "  --seed N\n"
         << "  --daily YYYY-MM-DD\n"
-        << "  --mode sprint|ultra|marathon|zen|cheese|finesse|seedrace|custom\n"
+        << "  --mode sprint|ultra|marathon|zen|cheese|finesse|seedrace|sandbox\n"
         << "  --tournament\n"
         << "  --replay FILE\n"
         << "  --verify FILE\n";
@@ -366,8 +367,10 @@ struct AppState {
     std::uint64_t seed{randomSeed()};
     RunSession run;
     ReplayViewer viewer;
-    std::string seed_text;
-    std::string seed_error;
+    bool settings_number_editing{};
+    bool settings_number_replace_on_type{};
+    std::string settings_number_text;
+    std::string settings_status;
     std::string config_path;
     std::string last_replay_path;
     std::string replay_status;
@@ -455,6 +458,187 @@ struct AppState {
         pending_replay_save.reset();
         pending_save_from_game=false;
         if(resume_run&&run.game&&run.paused)run.togglePause(SDL_GetTicksNS());
+    }
+
+    bool settingLocked(int item) const {
+        return cfg.rules.tournament && item >= SettingLock && item <= SettingNext;
+    }
+
+    static bool numericSetting(int item) {
+        switch (item) {
+            case SettingDas: case SettingArr: case SettingSdf: case SettingDcd:
+            case SettingLock: case SettingResets: case SettingNext:
+            case SettingFpsCap: case SettingSeed:
+                return true;
+            default:
+                return false;
+        }
+    }
+
+    void beginSettingNumberEdit() {
+        if (!numericSetting(settings_sel)) return;
+        if (settingLocked(settings_sel)) {
+            settings_status = "LOCKED BY TOURNAMENT";
+            return;
+        }
+        const auto& h = cfg.rules.handling;
+        switch (settings_sel) {
+            case SettingDas: settings_number_text = std::to_string(h.das_ms); break;
+            case SettingArr: settings_number_text = std::to_string(h.arr_ms); break;
+            case SettingSdf: settings_number_text = std::to_string(h.sdf); break;
+            case SettingDcd: settings_number_text = std::to_string(h.dcd_ms); break;
+            case SettingLock: settings_number_text = std::to_string(h.lock_delay_ms); break;
+            case SettingResets: settings_number_text = std::to_string(h.max_lock_resets); break;
+            case SettingNext: settings_number_text = std::to_string(cfg.rules.next_count); break;
+            case SettingFpsCap: settings_number_text = std::to_string(cfg.fps_cap); break;
+            case SettingSeed: settings_number_text = std::to_string(seed); break;
+            default: return;
+        }
+        settings_status.clear();
+        settings_number_editing = true;
+        settings_number_replace_on_type = true;
+        SDL_StartTextInput(win);
+    }
+
+    void cancelSettingNumberEdit() {
+        if (!settings_number_editing) return;
+        settings_number_editing = false;
+        settings_number_replace_on_type = false;
+        settings_number_text.clear();
+        settings_status.clear();
+        SDL_StopTextInput(win);
+    }
+
+    bool applySettingNumberEdit() {
+        if (!settings_number_editing || settings_number_text.empty()) {
+            settings_status = "ENTER A NUMBER";
+            return false;
+        }
+        try {
+            std::size_t used = 0;
+            const auto value = std::stoull(settings_number_text, &used, 10);
+            if (used != settings_number_text.size()) { settings_status = "INVALID NUMBER"; return false; }
+            auto assignInt = [&](int lo, int hi, int& target, const char* range) {
+                if (value > static_cast<unsigned long long>(hi) || value < static_cast<unsigned long long>(lo)) {
+                    settings_status = std::string("VALID RANGE: ") + range;
+                    return false;
+                }
+                target = static_cast<int>(value);
+                return true;
+            };
+
+            bool ok = false;
+            auto& h = cfg.rules.handling;
+            switch (settings_sel) {
+                case SettingDas: ok = assignInt(0, 1000, h.das_ms, "0-1000"); break;
+                case SettingArr: ok = assignInt(0, 500, h.arr_ms, "0-500"); break;
+                case SettingSdf: ok = assignInt(0, 200, h.sdf, "0-200"); break;
+                case SettingDcd: ok = assignInt(0, 1000, h.dcd_ms, "0-1000"); break;
+                case SettingLock: ok = assignInt(0, 2000, h.lock_delay_ms, "0-2000"); break;
+                case SettingResets: ok = assignInt(0, 100, h.max_lock_resets, "0-100"); break;
+                case SettingNext: ok = assignInt(1, 8, cfg.rules.next_count, "1-8"); break;
+                case SettingFpsCap: ok = assignInt(0, 1000, cfg.fps_cap, "0-1000"); break;
+                case SettingSeed: seed = static_cast<std::uint64_t>(value); ok = true; break;
+                default: break;
+            }
+            if (!ok) return false;
+        } catch (...) {
+            settings_status = settings_sel == SettingSeed ? "INVALID UINT64 SEED" : "INVALID NUMBER";
+            return false;
+        }
+
+        settings_number_editing = false;
+        settings_number_replace_on_type = false;
+        settings_number_text.clear();
+        settings_status = "VALUE APPLIED";
+        SDL_StopTextInput(win);
+        saveConfig(config_path, cfg);
+        return true;
+    }
+
+    void adjustSetting(int delta) {
+        if (settingLocked(settings_sel)) {
+            settings_status = "LOCKED BY TOURNAMENT";
+            return;
+        }
+        auto& h = cfg.rules.handling;
+        switch (settings_sel) {
+            case SettingDas: h.das_ms = std::clamp(h.das_ms + delta * 5, 0, 1000); break;
+            case SettingArr: h.arr_ms = std::clamp(h.arr_ms + delta, 0, 500); break;
+            case SettingSdf: h.sdf = std::clamp(h.sdf + delta, 0, 200); break;
+            case SettingDcd: h.dcd_ms = std::clamp(h.dcd_ms + delta * 5, 0, 1000); break;
+            case SettingLock: h.lock_delay_ms = std::clamp(h.lock_delay_ms + delta * 10, 0, 2000); break;
+            case SettingResets: h.max_lock_resets = std::clamp(h.max_lock_resets + delta, 0, 100); break;
+            case SettingRotate180: h.allow_180 = !h.allow_180; break;
+            case SettingIrs: h.irs = !h.irs; break;
+            case SettingIhs: h.ihs = !h.ihs; break;
+            case SettingGhost: cfg.rules.ghost = !cfg.rules.ghost; break;
+            case SettingNext: cfg.rules.next_count = std::clamp(cfg.rules.next_count + delta, 1, 8); break;
+            case SettingShowInputs: cfg.show_inputs = !cfg.show_inputs; break;
+            case SettingVsync:
+                cfg.vsync = !cfg.vsync;
+                SDL_SetRenderVSync(ren, cfg.vsync ? 1 : 0);
+                break;
+            case SettingFpsCap: {
+                static constexpr int caps[] = {0, 60, 120, 144, 165, 240, 360, 480, 500, 1000};
+                int next = cfg.fps_cap;
+                if (delta > 0) {
+                    for (int cap : caps) if (cap > cfg.fps_cap) { next = cap; break; }
+                } else {
+                    for (int i = static_cast<int>(sizeof(caps)/sizeof(caps[0])) - 1; i >= 0; --i) {
+                        if (caps[i] < cfg.fps_cap) { next = caps[i]; break; }
+                    }
+                }
+                cfg.fps_cap = next;
+                break;
+            }
+            case SettingTournament: cfg.rules.tournament = !cfg.rules.tournament; break;
+            case SettingSeed:
+                if (delta > 0 && seed < std::numeric_limits<std::uint64_t>::max()) ++seed;
+                else if (delta < 0 && seed > 0) --seed;
+                break;
+            default: return;
+        }
+        settings_status.clear();
+        saveConfig(config_path, cfg);
+    }
+
+    void activateSetting() {
+        if (numericSetting(settings_sel)) {
+            beginSettingNumberEdit();
+            return;
+        }
+        if (settingLocked(settings_sel)) {
+            settings_status = "LOCKED BY TOURNAMENT";
+            return;
+        }
+        switch (settings_sel) {
+            case SettingRotate180: case SettingIrs: case SettingIhs: case SettingGhost:
+            case SettingShowInputs: case SettingVsync: case SettingTournament:
+                adjustSetting(1);
+                break;
+            case SettingRandomSeed:
+                seed = randomSeed();
+                settings_status = "NEW RANDOM SEED";
+                break;
+            case SettingControls:
+                controls_sel = 0;
+                settings_status.clear();
+                screen = Screen::Controls;
+                break;
+            case SettingMiscellaneous:
+                settings_status.clear();
+                screen = Screen::Miscellaneous;
+                break;
+            case SettingReset:
+                resetSettings(cfg);
+                SDL_SetRenderVSync(ren, cfg.vsync ? 1 : 0);
+                saveConfig(config_path, cfg);
+                settings_status = "SETTINGS RESET";
+                break;
+            default:
+                break;
+        }
     }
 
     bool initialize(int argc, char** argv, bool& should_exit) {
@@ -617,32 +801,6 @@ struct AppState {
         }
         if(replay_dialog_open)return SDL_APP_CONTINUE;
 
-        if (screen == Screen::SeedEntry) {
-            if (ev.type == SDL_EVENT_TEXT_INPUT) {
-                for (const char* c = ev.text.text; *c; ++c) {
-                    if (*c >= '0' && *c <= '9' && seed_text.size() < 20) seed_text.push_back(*c);
-                }
-            } else if (ev.type == SDL_EVENT_KEY_DOWN && !ev.key.repeat) {
-                if (ev.key.key == SDLK_BACKSPACE && !seed_text.empty()) {
-                    seed_text.pop_back();
-                } else if (ev.key.key == SDLK_ESCAPE) {
-                    SDL_StopTextInput(win);
-                    screen = Screen::Menu;
-                    seed_error.clear();
-                } else if (ev.key.key == SDLK_RETURN || ev.key.key == SDLK_KP_ENTER) {
-                    try {
-                        seed = std::stoull(seed_text);
-                        SDL_StopTextInput(win);
-                        screen = Screen::Menu;
-                        seed_error.clear();
-                    } catch (...) {
-                        seed_error = "INVALID UINT64 SEED";
-                    }
-                }
-            }
-            return SDL_APP_CONTINUE;
-        }
-
         if (screen == Screen::Help) {
             if (ev.type == SDL_EVENT_KEY_DOWN && !ev.key.repeat && ev.key.key == SDLK_ESCAPE) {
                 screen = Screen::Menu;
@@ -653,33 +811,23 @@ struct AppState {
         if (screen == Screen::Menu) {
             if (ev.type == SDL_EVENT_KEY_DOWN && !ev.key.repeat) {
                 const auto key = ev.key.key;
-                if (key == SDLK_UP) menu_sel = (menu_sel + 11) % 12;
-                else if (key == SDLK_DOWN) menu_sel = (menu_sel + 1) % 12;
-                else if (key == SDLK_R) seed = randomSeed();
-                else if (key == SDLK_E) {
-                    seed_text = std::to_string(seed);
-                    seed_error.clear();
-                    screen = Screen::SeedEntry;
-                    SDL_StartTextInput(win);
-                } else if (key == SDLK_T) {
-                    cfg.rules.tournament = !cfg.rules.tournament;
-                    saveConfig(config_path, cfg);
-                } else if (key == SDLK_H) {
-                    screen = Screen::Help;
-                } else if (key == SDLK_RETURN || key == SDLK_KP_ENTER) {
+                if (key == SDLK_UP) menu_sel = (menu_sel + 10) % 11;
+                else if (key == SDLK_DOWN) menu_sel = (menu_sel + 1) % 11;
+                else if (key == SDLK_H) screen = Screen::Help;
+                else if (key == SDLK_RETURN || key == SDLK_KP_ENTER) {
                     if (menu_sel < 7) {
                         startRun(modeFromMenu(menu_sel), ev.key.timestamp);
                     } else if (menu_sel == 7) {
                         custom_sel = 0;
-                        screen = Screen::CustomSetup;
+                        screen = Screen::SandboxSetup;
                     } else if (menu_sel == 8) {
+                        settings_sel = 0;
+                        settings_status.clear();
                         screen = Screen::Settings;
                     } else if (menu_sel == 9) {
-                        screen = Screen::Controls;
-                    } else if (menu_sel == 10) {
-                        replay_menu_sel=0;
+                        replay_menu_sel = 0;
                         replay_status.clear();
-                        screen=Screen::ReplayMenu;
+                        screen = Screen::ReplayMenu;
                     } else {
                         return SDL_APP_SUCCESS;
                     }
@@ -710,7 +858,7 @@ struct AppState {
             return SDL_APP_CONTINUE;
         }
 
-        if (screen == Screen::CustomSetup) {
+        if (screen == Screen::SandboxSetup) {
             if (ev.type == SDL_EVENT_KEY_DOWN && !ev.key.repeat) {
                 const auto key = ev.key.key;
                 if (key == SDLK_ESCAPE) {
@@ -755,52 +903,52 @@ struct AppState {
         }
 
         if (screen == Screen::Settings) {
+            if (settings_number_editing) {
+                if (ev.type == SDL_EVENT_TEXT_INPUT) {
+                    const std::size_t limit = settings_sel == SettingSeed ? 20u : 10u;
+                    bool has_digit = false;
+                    for (const char* c = ev.text.text; *c; ++c) if (*c >= '0' && *c <= '9') { has_digit = true; break; }
+                    if (has_digit && settings_number_replace_on_type) { settings_number_text.clear(); settings_number_replace_on_type = false; }
+                    for (const char* c = ev.text.text; *c && settings_number_text.size() < limit; ++c) {
+                        if (*c >= '0' && *c <= '9') settings_number_text.push_back(*c);
+                    }
+                } else if (ev.type == SDL_EVENT_KEY_DOWN && !ev.key.repeat) {
+                    if (ev.key.key == SDLK_BACKSPACE) {
+                        if (settings_number_replace_on_type) { settings_number_text.clear(); settings_number_replace_on_type = false; }
+                        else if (!settings_number_text.empty()) settings_number_text.pop_back();
+                    } else if (ev.key.key == SDLK_ESCAPE) {
+                        cancelSettingNumberEdit();
+                    } else if (ev.key.key == SDLK_RETURN || ev.key.key == SDLK_KP_ENTER) {
+                        applySettingNumberEdit();
+                    }
+                }
+                return SDL_APP_CONTINUE;
+            }
+
             if (ev.type == SDL_EVENT_KEY_DOWN && !ev.key.repeat) {
                 const auto key = ev.key.key;
                 if (key == SDLK_ESCAPE) {
                     saveConfig(config_path, cfg);
+                    settings_status.clear();
                     screen = Screen::Menu;
                 } else if (key == SDLK_UP) {
-                    settings_sel = (settings_sel + 13) % 14;
+                    settings_sel = (settings_sel + SettingCount - 1) % SettingCount;
+                    settings_status.clear();
                 } else if (key == SDLK_DOWN) {
-                    settings_sel = (settings_sel + 1) % 14;
-                } else if ((key == SDLK_RETURN || key == SDLK_KP_ENTER) && settings_sel == 13) {
-                    resetSettings(cfg);
-                    SDL_SetRenderVSync(ren, cfg.vsync ? 1 : 0);
-                    saveConfig(config_path, cfg);
+                    settings_sel = (settings_sel + 1) % SettingCount;
+                    settings_status.clear();
+                } else if (key == SDLK_RETURN || key == SDLK_KP_ENTER) {
+                    activateSetting();
                 } else if (key == SDLK_LEFT || key == SDLK_RIGHT) {
-                    const int delta = key == SDLK_RIGHT ? 1 : -1;
-                    auto& handling = cfg.rules.handling;
-                    const bool locked = cfg.rules.tournament && settings_sel >= 4 && settings_sel <= 10;
-                    if (!locked) {
-                        switch (settings_sel) {
-                            case 0: handling.das_ms = std::clamp(handling.das_ms + delta * 5, 0, 1000); break;
-                            case 1: handling.arr_ms = std::clamp(handling.arr_ms + delta, 0, 500); break;
-                            case 2: handling.sdf = std::clamp(handling.sdf + delta, 0, 200); break;
-                            case 3: handling.dcd_ms = std::clamp(handling.dcd_ms + delta * 5, 0, 1000); break;
-                            case 4: handling.lock_delay_ms = std::clamp(handling.lock_delay_ms + delta * 10, 0, 2000); break;
-                            case 5: handling.max_lock_resets = std::clamp(handling.max_lock_resets + delta, 0, 100); break;
-                            case 6: handling.allow_180 = !handling.allow_180; break;
-                            case 7: handling.irs = !handling.irs; break;
-                            case 8: handling.ihs = !handling.ihs; break;
-                            case 9: cfg.rules.ghost = !cfg.rules.ghost; break;
-                            case 10: cfg.rules.next_count = std::clamp(cfg.rules.next_count + delta, 1, 8); break;
-                            case 11:
-                                cfg.vsync = !cfg.vsync;
-                                SDL_SetRenderVSync(ren, cfg.vsync ? 1 : 0);
-                                break;
-                            case 12: {
-                                static constexpr int caps[] = {0, 60, 120, 144, 165, 240, 360, 480, 500, 1000};
-                                int index = 0;
-                                for (int i = 0; i < 10; ++i) if (caps[i] == cfg.fps_cap) index = i;
-                                index = std::clamp(index + delta, 0, 9);
-                                cfg.fps_cap = caps[index];
-                                break;
-                            }
-                            default: break;
-                        }
-                    }
+                    adjustSetting(key == SDLK_RIGHT ? 1 : -1);
                 }
+            }
+            return SDL_APP_CONTINUE;
+        }
+
+        if (screen == Screen::Miscellaneous) {
+            if (ev.type == SDL_EVENT_KEY_DOWN && !ev.key.repeat && ev.key.key == SDLK_ESCAPE) {
+                screen = Screen::Settings;
             }
             return SDL_APP_CONTINUE;
         }
@@ -830,16 +978,21 @@ struct AppState {
             if (ev.type == SDL_EVENT_KEY_DOWN && !ev.key.repeat) {
                 const auto key = ev.key.key;
                 if (key == SDLK_ESCAPE) {
-                    screen = Screen::Menu;
+                    screen = Screen::Settings;
                     saveConfig(config_path, cfg);
                 } else if (key == SDLK_UP) {
-                    controls_sel = (controls_sel + 7) % 8;
+                    controls_sel = (controls_sel + kControlItemCount - 1) % kControlItemCount;
                 } else if (key == SDLK_DOWN) {
-                    controls_sel = (controls_sel + 1) % 8;
+                    controls_sel = (controls_sel + 1) % kControlItemCount;
                 } else if (key == SDLK_RETURN || key == SDLK_KP_ENTER) {
-                    rebinding = true;
-                    wait_pad = false;
-                } else if (key == SDLK_G) {
+                    if (controls_sel == kControlResetIndex) {
+                        resetControls(cfg);
+                        saveConfig(config_path, cfg);
+                    } else {
+                        rebinding = true;
+                        wait_pad = false;
+                    }
+                } else if (key == SDLK_G && controls_sel < kControlResetIndex) {
                     rebinding = true;
                     wait_pad = true;
                 }
@@ -933,6 +1086,7 @@ struct AppState {
             info.paused = run.paused;
             info.status = run.status;
             info.recent_inputs = run.recent;
+            info.show_inputs = cfg.show_inputs;
             renderGame(ren, *run.game, info);
         } else if (screen == Screen::Replay && viewer.game) {
             viewer.tick(now);
@@ -942,6 +1096,7 @@ struct AppState {
             info.replay_speed = viewer.speed;
             info.replay_paused = viewer.paused;
             info.recent_inputs = viewer.recent();
+            info.show_inputs = cfg.show_inputs;
             info.status = !replay_status.empty()
                               ? replay_status
                               : (viewer.rep.final_hash.empty()
@@ -949,17 +1104,17 @@ struct AppState {
                                   : (verifyReplay(viewer.rep) ? "REPLAY VERIFIED" : "REPLAY HASH FAILED"));
             renderGame(ren, *viewer.game, info);
         } else if (screen == Screen::Menu) {
-            renderMenu(ren, menu_sel, seed, cfg.rules.tournament);
+            renderMenu(ren, menu_sel, cfg.rules.tournament);
         } else if (screen == Screen::ReplayMenu) {
             renderReplayMenu(ren, replay_menu_sel, lastReplayExists(), replay_status);
         } else if (screen == Screen::Settings) {
-            renderSettings(ren, cfg, settings_sel);
-        } else if (screen == Screen::CustomSetup) {
-            renderCustomSetup(ren, cfg, custom_sel);
+            renderSettings(ren, cfg, seed, settings_sel, settings_number_editing, settings_number_text, settings_status);
+        } else if (screen == Screen::SandboxSetup) {
+            renderSandboxSetup(ren, cfg, custom_sel);
         } else if (screen == Screen::Controls) {
             renderControls(ren, cfg, controls_sel, rebinding, wait_pad);
-        } else if (screen == Screen::SeedEntry) {
-            renderSeedEntry(ren, seed_text, seed_error);
+        } else if (screen == Screen::Miscellaneous) {
+            renderMiscellaneous(ren);
         } else if (screen == Screen::Help) {
             renderHelp(ren);
         }
