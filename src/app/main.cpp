@@ -56,16 +56,23 @@ std::uint64_t seedFromText(const std::string& s) {
     return std::stoull(hash.substr(0, 16), nullptr, 16);
 }
 
-void enforceTournament(AppConfig& cfg) {
-    if (!cfg.rules.tournament) return;
-    cfg.rules.handling.allow_180 = false;
-    cfg.rules.handling.lock_delay_ms = 500;
-    cfg.rules.handling.max_lock_resets = 15;
-    cfg.rules.ghost = true;
-    cfg.rules.next_count = 5;
-    cfg.rules.garbage_cap = 8;
-    cfg.rules.garbage_delay_ms = 500;
-    cfg.rules.garbage_messiness_pct = 25;
+Rules effectiveRules(const AppConfig& cfg) {
+    Rules rules = cfg.rules;
+    if (!rules.tournament) return rules;
+
+    // Tournament lock changes only the rules used by the run. Personal settings
+    // remain intact so toggling tournament mode cannot destroy a player's setup.
+    rules.handling.allow_180 = false;
+    rules.handling.irs = true;
+    rules.handling.ihs = true;
+    rules.handling.lock_delay_ms = 500;
+    rules.handling.max_lock_resets = 15;
+    rules.ghost = true;
+    rules.next_count = 5;
+    rules.garbage_cap = 8;
+    rules.garbage_delay_ms = 500;
+    rules.garbage_messiness_pct = 25;
+    return rules;
 }
 
 std::string preferenceRoot() {
@@ -207,6 +214,7 @@ struct RunSession {
 
     void input(Uint64 ns, Action action, bool down) {
         if (!game || paused) return;
+        status.clear();
         const auto t = simAt(ns);
         game->advanceTo(t);
         if (down) game->press(action);
@@ -281,8 +289,7 @@ struct AppState {
     Uint64 frame_start{};
 
     void startRun(Mode mode, Uint64 now) {
-        enforceTournament(cfg);
-        run.start(seed, mode, cfg.rules, now);
+        run.start(seed, mode, effectiveRules(cfg), now);
         screen = Screen::Game;
     }
 
@@ -367,7 +374,6 @@ struct AppState {
 
         loadConfig(config_path, cfg);
         if (tournament) cfg.rules.tournament = true;
-        enforceTournament(cfg);
 
         const std::string title = std::string("FasTris ") + kVersion;
         win = SDL_CreateWindow(title.c_str(), 960, 720,
@@ -476,7 +482,6 @@ struct AppState {
                     SDL_StartTextInput(win);
                 } else if (key == SDLK_T) {
                     cfg.rules.tournament = !cfg.rules.tournament;
-                    enforceTournament(cfg);
                     saveConfig(config_path, cfg);
                 } else if (key == SDLK_H) {
                     screen = Screen::Help;
@@ -507,13 +512,17 @@ struct AppState {
                     saveConfig(config_path, cfg);
                     screen = Screen::Menu;
                 } else if (key == SDLK_UP) {
-                    settings_sel = (settings_sel + 8) % 9;
+                    settings_sel = (settings_sel + 12) % 13;
                 } else if (key == SDLK_DOWN) {
-                    settings_sel = (settings_sel + 1) % 9;
+                    settings_sel = (settings_sel + 1) % 13;
+                } else if (key == SDLK_R) {
+                    const bool tournament = cfg.rules.tournament;
+                    cfg.rules = Rules{};
+                    cfg.rules.tournament = tournament;
                 } else if (key == SDLK_LEFT || key == SDLK_RIGHT) {
                     const int delta = key == SDLK_RIGHT ? 1 : -1;
                     auto& handling = cfg.rules.handling;
-                    const bool locked = cfg.rules.tournament && settings_sel >= 4 && settings_sel <= 6;
+                    const bool locked = cfg.rules.tournament && settings_sel >= 4 && settings_sel <= 10;
                     if (!locked) {
                         switch (settings_sel) {
                             case 0: handling.das_ms = std::clamp(handling.das_ms + delta * 5, 0, 1000); break;
@@ -523,11 +532,15 @@ struct AppState {
                             case 4: handling.lock_delay_ms = std::clamp(handling.lock_delay_ms + delta * 10, 0, 2000); break;
                             case 5: handling.max_lock_resets = std::clamp(handling.max_lock_resets + delta, 0, 100); break;
                             case 6: handling.allow_180 = !handling.allow_180; break;
-                            case 7:
+                            case 7: handling.irs = !handling.irs; break;
+                            case 8: handling.ihs = !handling.ihs; break;
+                            case 9: cfg.rules.ghost = !cfg.rules.ghost; break;
+                            case 10: cfg.rules.next_count = std::clamp(cfg.rules.next_count + delta, 1, 8); break;
+                            case 11:
                                 cfg.vsync = !cfg.vsync;
                                 SDL_SetRenderVSync(ren, cfg.vsync ? 1 : 0);
                                 break;
-                            case 8: {
+                            case 12: {
                                 static constexpr int caps[] = {0, 60, 120, 144, 165, 240, 360, 480, 500, 1000};
                                 int index = 0;
                                 for (int i = 0; i < 10; ++i) if (caps[i] == cfg.fps_cap) index = i;
@@ -538,7 +551,6 @@ struct AppState {
                             default: break;
                         }
                     }
-                    enforceTournament(cfg);
                 }
             }
             return SDL_APP_CONTINUE;
@@ -615,11 +627,12 @@ struct AppState {
                     return SDL_APP_CONTINUE;
                 }
                 if (key == cfg.keys[static_cast<int>(Action::Pause)]) {
-                    run.togglePause(timestamp);
+                    if (run.game->rules().tournament) run.status = "PAUSE DISABLED IN TOURNAMENT";
+                    else run.togglePause(timestamp);
                     return SDL_APP_CONTINUE;
                 }
                 if (key == cfg.keys[static_cast<int>(Action::Restart)]) {
-                    run.start(seed, run.game->mode(), cfg.rules, timestamp);
+                    run.start(seed, run.game->mode(), effectiveRules(cfg), timestamp);
                     return SDL_APP_CONTINUE;
                 }
                 if (key == SDLK_F6) {
@@ -635,11 +648,12 @@ struct AppState {
             } else if (ev.type == SDL_EVENT_GAMEPAD_BUTTON_DOWN) {
                 const int button = ev.gbutton.button;
                 if (button == cfg.pads[static_cast<int>(Action::Pause)]) {
-                    run.togglePause(timestamp);
+                    if (run.game->rules().tournament) run.status = "PAUSE DISABLED IN TOURNAMENT";
+                    else run.togglePause(timestamp);
                     return SDL_APP_CONTINUE;
                 }
                 if (button == cfg.pads[static_cast<int>(Action::Restart)]) {
-                    run.start(seed, run.game->mode(), cfg.rules, timestamp);
+                    run.start(seed, run.game->mode(), effectiveRules(cfg), timestamp);
                     return SDL_APP_CONTINUE;
                 }
                 const auto action = padAction(cfg, button);

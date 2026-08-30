@@ -35,8 +35,8 @@ struct ActivePiece {
 };
 
 struct Handling {
-    int das_ms{100};
-    int arr_ms{0};
+    int das_ms{140};
+    int arr_ms{25};
     int sdf{20};                  // 0 = sonic soft drop
     int dcd_ms{0};
     int lock_delay_ms{500};

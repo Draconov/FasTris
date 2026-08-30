@@ -100,11 +100,52 @@ static void test_replay_fuzz() {
     assert(verifyReplay(r));
 }
 
+
+static void test_default_horizontal_handling() {
+    Rules r;
+    assert(r.handling.das_ms==140);
+    assert(r.handling.arr_ms==25);
+
+    Game tap(2026,Mode::Zen,r);
+    const int start_x=tap.active().x;
+    tap.press(Action::Left);
+    assert(tap.active().x==start_x-1); // key-down always moves exactly one cell.
+    tap.advanceTo(120000);            // still inside the 140 ms DAS window.
+    assert(tap.active().x==start_x-1);
+    tap.release(Action::Left);
+    tap.advanceTo(500000);
+    assert(tap.active().x==start_x-1); // releasing before DAS must never auto-shift.
+
+    Game held(2026,Mode::Zen,r);
+    const int held_start=held.active().x;
+    held.press(Action::Right);
+    assert(held.active().x==held_start+1);
+    held.advanceTo(139999);
+    assert(held.active().x==held_start+1);
+    held.advanceTo(140000);
+    assert(held.active().x==held_start+2); // first repeat after DAS.
+    held.advanceTo(165000);
+    assert(held.active().x==held_start+3); // then one cell per ARR interval.
+}
+
+static void test_zero_arr_remains_expert_instant_shift() {
+    Rules r;
+    r.handling.das_ms=100;
+    r.handling.arr_ms=0;
+    Game g(9001,Mode::Zen,r);
+    g.press(Action::Left);
+    const int after_press=g.active().x;
+    g.advanceTo(99999);
+    assert(g.active().x==after_press);
+    g.advanceTo(100000);
+    assert(g.active().x<=0); // zero ARR intentionally shifts to the wall after DAS.
+}
+
 static void test_battle_smoke() {
     Rules r; r.garbage_delay_ms=0; Battle b(1,2,r,r); b.advanceTo(1000); b.press(0,Action::HardDrop); b.advanceTo(2000); assert(!b.game(0).gameOver()); assert(!b.game(1).gameOver());
 }
 
 int main(){
-    test_rng_and_bag();test_shapes();test_board();test_game_determinism();test_seed_difference();test_replay();test_sha();test_irs_ihs();test_replay_fuzz();test_battle_smoke();
+    test_rng_and_bag();test_shapes();test_board();test_game_determinism();test_seed_difference();test_replay();test_sha();test_irs_ihs();test_replay_fuzz();test_default_horizontal_handling();test_zero_arr_remains_expert_instant_shift();test_battle_smoke();
     std::cout<<"FasTris core tests: PASS\n";
 }
