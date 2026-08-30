@@ -1,0 +1,5 @@
+.gradle/
+local.properties
+signing.properties
+app/build/
+app/libs/*.aar

@@ -1,0 +1,159 @@
+name: build
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  EM_VERSION: '6.0.5'
+  SDL_ANDROID_URL: https://github.com/libsdl-org/SDL/releases/download/release-3.4.14/SDL3-devel-3.4.14-android.zip
+  SDL_ANDROID_SHA256: e41691e75433b2a0a75685781bed2160fe4a85f75f3803f7f43d1811e212e3ef
+
+jobs:
+  sanity:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v6
+      - name: Repository sanity checks
+        run: python3 scripts/ci_sanity.py
+
+  core:
+    needs: sanity
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2022, ubuntu-22.04, macos-15]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+      - name: Configure core
+        run: cmake -S . -B build -DFASTTRIS_BUILD_APP=OFF -DCMAKE_BUILD_TYPE=Release
+      - name: Build core
+        run: cmake --build build --config Release --parallel
+      - name: Test core
+        run: ctest --test-dir build -C Release --output-on-failure
+
+  desktop-windows:
+    needs: sanity
+    runs-on: windows-2022
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v6
+      - name: Configure
+        run: cmake -S . -B build -A x64 -DFASTTRIS_BUILD_TESTS=OFF
+      - name: Build
+        run: cmake --build build --config Release --parallel
+      - name: Verify outputs
+        shell: pwsh
+        run: |
+          $required = @(
+            'build/Release/FasTris.exe',
+            'build/Release/fastris_verify.exe',
+            'build/Release/fastris_sequence.exe',
+            'build/Release/fastris_bench.exe'
+          )
+          foreach ($file in $required) {
+            if (-not (Test-Path $file)) { throw "Missing expected output: $file" }
+          }
+
+  desktop-linux:
+    needs: sanity
+    runs-on: ubuntu-22.04
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v6
+      - name: SDL build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libasound2-dev libpulse-dev libdbus-1-dev libudev-dev \
+            libx11-dev libxext-dev libxrandr-dev libxcursor-dev libxi-dev \
+            libxfixes-dev libxss-dev libwayland-dev libxkbcommon-dev \
+            libdrm-dev libgbm-dev libgl1-mesa-dev libegl1-mesa-dev
+      - name: Configure
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DFASTTRIS_BUILD_TESTS=OFF
+      - name: Build
+        run: cmake --build build --parallel
+      - name: Verify outputs
+        run: test -x build/FasTris && test -x build/fastris_verify && test -x build/fastris_sequence && test -x build/fastris_bench
+
+  desktop-macos:
+    needs: sanity
+    runs-on: macos-15
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v6
+      - name: Configure universal macOS build
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_OSX_ARCHITECTURES="x86_64;arm64" -DFASTTRIS_BUILD_TESTS=OFF -DFASTTRIS_BUILD_TOOLS=OFF
+      - name: Build
+        run: cmake --build build --parallel
+      - name: Verify bundle architectures
+        run: |
+          test -d build/FasTris.app
+          BIN="build/FasTris.app/Contents/MacOS/FasTris"
+          test -x "$BIN"
+          lipo -verify_arch x86_64 arm64 "$BIN"
+
+  web:
+    needs: sanity
+    runs-on: ubuntu-22.04
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v6
+      - uses: emscripten-core/setup-emsdk@v15
+        with:
+          version: ${{ env.EM_VERSION }}
+          actions-cache-folder: emsdk-cache
+      - name: Install Ninja
+        run: sudo apt-get update && sudo apt-get install -y ninja-build
+      - name: Configure
+        run: emcmake cmake -S . -B build-web -G Ninja -DCMAKE_BUILD_TYPE=Release -DFASTTRIS_BUILD_TESTS=OFF -DFASTTRIS_BUILD_TOOLS=OFF
+      - name: Build
+        run: cmake --build build-web --parallel
+      - name: Verify browser bundle
+        run: test -s build-web/index.html && test -s build-web/index.js && test -s build-web/index.wasm
+
+  android:
+    needs: sanity
+    runs-on: ubuntu-22.04
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@v3
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.11.1'
+      - name: Install Android SDK/NDK/CMake
+        shell: bash
+        run: |
+          set -euo pipefail
+          sdkmanager "platforms;android-35" "build-tools;35.0.0" "ndk;28.2.13676358" "cmake;3.22.1"
+      - name: Download pinned SDL3 Android archive
+        shell: bash
+        run: scripts/prepare_sdl_android.sh
+      - name: Build unsigned APK
+        run: gradle --no-daemon -p platform/android :app:assembleRelease --stacktrace
+      - name: Verify APK
+        shell: bash
+        run: |
+          set -euo pipefail
+          apk="platform/android/app/build/outputs/apk/release/app-release-unsigned.apk"
+          if [[ ! -s "$apk" ]]; then
+            echo "Expected unsigned release APK was not produced" >&2
+            find platform/android/app/build/outputs -type f -print || true
+            exit 1
+          fi

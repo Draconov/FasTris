@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <meta name="theme-color" content="#0b0e14">
+  <title>FasTris</title>
+  <style>
+    html,body{margin:0;width:100%;height:100%;overflow:hidden;background:#0b0e14;color:#dce1e8;font-family:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
+    body{display:grid;place-items:center}
+    #wrap{width:100%;height:100%;display:grid;place-items:center;position:relative}
+    canvas{display:block;max-width:100%;max-height:100%;width:auto;height:auto;outline:none;background:#0b0e14;image-rendering:auto}
+    #status{position:absolute;left:12px;bottom:10px;font-size:12px;color:#8c98a8;pointer-events:none}
+  </style>
+</head>
+<body>
+  <div id="wrap">
+    <canvas id="canvas" tabindex="0" oncontextmenu="event.preventDefault()"></canvas>
+    <div id="status">Loading FasTris…</div>
+  </div>
+  <script>
+    var Module = {
+      canvas: document.getElementById('canvas'),
+      setStatus: function(text) {
+        var node = document.getElementById('status');
+        node.textContent = text || '';
+        if (!text) node.style.display = 'none';
+      },
+      onRuntimeInitialized: function() {
+        Module.setStatus('');
+        Module.canvas.focus();
+      }
+    };
+  </script>
+  {{{ SCRIPT }}}
+</body>
+</html>

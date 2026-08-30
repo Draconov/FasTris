@@ -1,0 +1,89 @@
+plugins {
+    id 'com.android.application'
+}
+
+import java.util.Properties
+
+def versionText = rootProject.file('../../VERSION').text.trim()
+def versionParts = versionText.tokenize('.').collect { it as int }
+if (versionParts.size() != 3) {
+    throw new GradleException("VERSION must use MAJOR.MINOR.PATCH")
+}
+if (versionParts[1] >= 1000 || versionParts[2] >= 1000) {
+    throw new GradleException("VERSION minor and patch components must be below 1000 for Android versionCode generation")
+}
+def computedVersionCode = versionParts[0] * 1000000 + versionParts[1] * 1000 + versionParts[2]
+if (computedVersionCode <= 0) computedVersionCode = 1
+if (computedVersionCode > 2100000000) {
+    throw new GradleException("VERSION is too large for Android versionCode: ${computedVersionCode}")
+}
+
+def signingProps = new Properties()
+def signingPropsFile = rootProject.file('signing.properties')
+def hasReleaseSigning = signingPropsFile.exists()
+if (hasReleaseSigning) {
+    signingPropsFile.withInputStream { signingProps.load(it) }
+}
+
+android {
+    namespace 'com.draconov.fastris'
+    compileSdk 35
+    ndkVersion '28.2.13676358'
+
+    defaultConfig {
+        applicationId 'com.draconov.fastris'
+        minSdk 21
+        targetSdk 35
+        versionCode computedVersionCode
+        versionName versionText
+
+        ndk {
+            abiFilters 'arm64-v8a', 'armeabi-v7a', 'x86_64'
+        }
+
+        externalNativeBuild {
+            cmake {
+                arguments '-DFASTTRIS_BUILD_APP=ON',
+                          '-DFASTTRIS_BUILD_TESTS=OFF',
+                          '-DFASTTRIS_BUILD_TOOLS=OFF',
+                          '-DFASTTRIS_USE_SYSTEM_SDL=ON'
+                cppFlags '-std=c++20'
+            }
+        }
+    }
+
+    buildFeatures {
+        prefab true
+    }
+
+    signingConfigs {
+        release {
+            if (hasReleaseSigning) {
+                storeFile file(signingProps['storeFile'])
+                storePassword signingProps['storePassword']
+                keyAlias signingProps['keyAlias']
+                keyPassword signingProps['keyPassword']
+            }
+        }
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+            if (hasReleaseSigning) {
+                signingConfig signingConfigs.release
+            }
+        }
+    }
+
+    externalNativeBuild {
+        cmake {
+            path file('../../../CMakeLists.txt')
+            version '3.22.1'
+        }
+    }
+}
+
+dependencies {
+    implementation files('libs/SDL3.aar')
+}

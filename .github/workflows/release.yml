@@ -1,0 +1,349 @@
+name: release
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - VERSION
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fastris-release
+  cancel-in-progress: false
+
+env:
+  EM_VERSION: '6.0.5'
+  SDL_ANDROID_URL: https://github.com/libsdl-org/SDL/releases/download/release-3.4.14/SDL3-devel-3.4.14-android.zip
+  SDL_ANDROID_SHA256: e41691e75433b2a0a75685781bed2160fe4a85f75f3803f7f43d1811e212e3ef
+
+jobs:
+  version:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 5
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      tag: ${{ steps.version.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - name: Repository sanity checks
+        run: python3 scripts/ci_sanity.py
+      - id: version
+        name: Validate release version and tag
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "$GITHUB_REF_NAME" != "main" ]]; then
+            echo "Releases must run from the main branch; got '$GITHUB_REF_NAME'." >&2
+            exit 1
+          fi
+
+          VERSION="$(tr -d '[:space:]' < VERSION)"
+          if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "VERSION must be MAJOR.MINOR.PATCH; got '$VERSION'" >&2
+            exit 1
+          fi
+          TAG="v$VERSION"
+
+          if git rev-parse -q --verify "refs/tags/$TAG" >/dev/null; then
+            tagged_sha="$(git rev-list -n 1 "$TAG")"
+            if [[ "$tagged_sha" != "$GITHUB_SHA" ]]; then
+              echo "$TAG already points to $tagged_sha, not $GITHUB_SHA." >&2
+              echo "Bump VERSION instead of moving a published version tag." >&2
+              exit 1
+            fi
+          fi
+
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "Releasing FasTris $VERSION"
+
+  tests:
+    needs: version
+    runs-on: ubuntu-22.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+      - name: Configure deterministic core tests
+        run: cmake -S . -B build-tests -DFASTTRIS_BUILD_APP=OFF -DCMAKE_BUILD_TYPE=Release
+      - name: Build tests
+        run: cmake --build build-tests --parallel
+      - name: Run tests
+        run: ctest --test-dir build-tests --output-on-failure
+
+  windows:
+    needs: version
+    runs-on: windows-2022
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v6
+      - name: Configure
+        run: cmake -S . -B build -A x64 -DFASTTRIS_BUILD_TESTS=OFF
+      - name: Build
+        run: cmake --build build --config Release --parallel
+      - name: Package
+        shell: pwsh
+        run: |
+          $version = "${{ needs.version.outputs.version }}"
+          $stage = "dist/FasTris-v$version-windows-x64"
+          New-Item -ItemType Directory -Force -Path $stage | Out-Null
+          $required = @(
+            'build/Release/FasTris.exe',
+            'build/Release/fastris_verify.exe',
+            'build/Release/fastris_sequence.exe',
+            'build/Release/fastris_bench.exe'
+          )
+          foreach ($file in $required) {
+            if (-not (Test-Path $file)) { throw "Missing expected output: $file" }
+            Copy-Item $file $stage/
+          }
+          Copy-Item README.md,VERSION $stage/
+          Compress-Archive -Path $stage -DestinationPath "dist/FasTris-v$version-windows-x64.zip"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows
+          path: dist/*.zip
+          if-no-files-found: error
+
+  linux:
+    needs: version
+    runs-on: ubuntu-22.04
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v6
+      - name: SDL build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build \
+            libasound2-dev libpulse-dev libdbus-1-dev libudev-dev \
+            libx11-dev libxext-dev libxrandr-dev libxcursor-dev libxi-dev \
+            libxfixes-dev libxss-dev libwayland-dev libxkbcommon-dev \
+            libdrm-dev libgbm-dev libgl1-mesa-dev libegl1-mesa-dev
+      - name: Configure
+        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DFASTTRIS_BUILD_TESTS=OFF
+      - name: Build
+        run: cmake --build build --parallel
+      - name: Package
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${{ needs.version.outputs.version }}"
+          stage="dist/FasTris-v${version}-linux-x86_64"
+          mkdir -p "$stage"
+          for file in FasTris fastris_verify fastris_sequence fastris_bench; do
+            test -x "build/$file"
+            cp "build/$file" "$stage/"
+          done
+          cp README.md VERSION "$stage/"
+          tar -C dist -czf "dist/FasTris-v${version}-linux-x86_64.tar.gz" "FasTris-v${version}-linux-x86_64"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux
+          path: dist/*.tar.gz
+          if-no-files-found: error
+
+  macos:
+    needs: version
+    runs-on: macos-15
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v6
+      - name: Configure universal macOS build
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_OSX_ARCHITECTURES="x86_64;arm64" -DFASTTRIS_BUILD_TESTS=OFF -DFASTTRIS_BUILD_TOOLS=OFF
+      - name: Build
+        run: cmake --build build --parallel
+      - name: Verify universal app
+        run: |
+          set -euo pipefail
+          BIN="build/FasTris.app/Contents/MacOS/FasTris"
+          test -x "$BIN"
+          lipo -verify_arch x86_64 arm64 "$BIN"
+      - name: Package
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${{ needs.version.outputs.version }}"
+          stage="dist/FasTris-v${version}-macos-universal"
+          mkdir -p "$stage"
+          cp -R build/FasTris.app "$stage/"
+          cp README.md VERSION "$stage/"
+          ditto -c -k --sequesterRsrc --keepParent "$stage" "dist/FasTris-v${version}-macos-universal.zip"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos
+          path: dist/*.zip
+          if-no-files-found: error
+
+  web:
+    needs: version
+    runs-on: ubuntu-22.04
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v6
+      - uses: emscripten-core/setup-emsdk@v15
+        with:
+          version: ${{ env.EM_VERSION }}
+          actions-cache-folder: emsdk-cache
+      - name: Install Ninja
+        run: sudo apt-get update && sudo apt-get install -y ninja-build zip
+      - name: Configure
+        run: emcmake cmake -S . -B build-web -G Ninja -DCMAKE_BUILD_TYPE=Release -DFASTTRIS_BUILD_TESTS=OFF -DFASTTRIS_BUILD_TOOLS=OFF
+      - name: Build
+        run: cmake --build build-web --parallel
+      - name: Package
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -s build-web/index.html
+          test -s build-web/index.js
+          test -s build-web/index.wasm
+          version="${{ needs.version.outputs.version }}"
+          stage="dist/FasTris-v${version}-web"
+          mkdir -p "$stage"
+          find build-web -maxdepth 1 -type f \( -name 'index.*' -o -name '*.data' -o -name '*.worker.js' \) -exec cp {} "$stage/" \;
+          cp VERSION "$stage/"
+          (cd "$stage" && zip -9 -r "../FasTris-v${version}-web.zip" .)
+      - uses: actions/upload-artifact@v4
+        with:
+          name: web
+          path: dist/*.zip
+          if-no-files-found: error
+
+  android:
+    needs: version
+    runs-on: ubuntu-22.04
+    timeout-minutes: 40
+    env:
+      ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+      ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+      ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+      ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@v3
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.11.1'
+      - name: Install Android SDK/NDK/CMake
+        shell: bash
+        run: |
+          set -euo pipefail
+          sdkmanager "platforms;android-35" "build-tools;35.0.0" "ndk;28.2.13676358" "cmake;3.22.1"
+      - name: Download pinned SDL3 Android archive
+        shell: bash
+        run: scripts/prepare_sdl_android.sh
+      - name: Configure Android release signing when secrets exist
+        shell: bash
+        run: |
+          set -euo pipefail
+          present=0
+          [[ -n "${ANDROID_KEYSTORE_BASE64:-}" ]] && present=$((present + 1))
+          [[ -n "${ANDROID_KEY_ALIAS:-}" ]] && present=$((present + 1))
+          [[ -n "${ANDROID_KEYSTORE_PASSWORD:-}" ]] && present=$((present + 1))
+          [[ -n "${ANDROID_KEY_PASSWORD:-}" ]] && present=$((present + 1))
+
+          if [[ "$present" -eq 4 ]]; then
+            printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/fastris-release.jks"
+            cat > platform/android/signing.properties <<PROPS
+          storeFile=$RUNNER_TEMP/fastris-release.jks
+          storePassword=$ANDROID_KEYSTORE_PASSWORD
+          keyAlias=$ANDROID_KEY_ALIAS
+          keyPassword=$ANDROID_KEY_PASSWORD
+          PROPS
+            echo "Android signing enabled."
+          elif [[ "$present" -eq 0 ]]; then
+            echo "Android signing secrets are not configured; publishing an unsigned APK."
+          else
+            echo "Android signing is partially configured. Set all four ANDROID_* secrets or none of them." >&2
+            exit 1
+          fi
+      - name: Build APK
+        run: gradle --no-daemon -p platform/android :app:assembleRelease --stacktrace
+      - name: Package APK
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${{ needs.version.outputs.version }}"
+          mkdir -p dist
+          signed="platform/android/app/build/outputs/apk/release/app-release.apk"
+          unsigned="platform/android/app/build/outputs/apk/release/app-release-unsigned.apk"
+          if [[ -s "$signed" ]]; then
+            cp "$signed" "dist/FasTris-v${version}-android.apk"
+          elif [[ -s "$unsigned" ]]; then
+            cp "$unsigned" "dist/FasTris-v${version}-android-unsigned.apk"
+          else
+            echo "No release APK produced" >&2
+            find platform/android/app/build/outputs -maxdepth 5 -type f -print || true
+            exit 1
+          fi
+      - uses: actions/upload-artifact@v4
+        with:
+          name: android
+          path: dist/*.apk
+          if-no-files-found: error
+
+  release:
+    needs: [version, tests, windows, linux, macos, web, android]
+    permissions:
+      contents: write
+    runs-on: ubuntu-22.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Verify release payload
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${{ needs.version.outputs.version }}"
+          test -s "dist/FasTris-v${version}-windows-x64.zip"
+          test -s "dist/FasTris-v${version}-linux-x86_64.tar.gz"
+          test -s "dist/FasTris-v${version}-macos-universal.zip"
+          test -s "dist/FasTris-v${version}-web.zip"
+          compgen -G "dist/FasTris-v${version}-android*.apk" >/dev/null
+      - name: Create checksums
+        shell: bash
+        working-directory: dist
+        run: |
+          set -euo pipefail
+          find . -maxdepth 1 -type f ! -name SHA256SUMS.txt -printf '%f\0' \
+            | sort -z \
+            | xargs -0 sha256sum > SHA256SUMS.txt
+      - name: Create or update GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.version.outputs.tag }}
+          VERSION: ${{ needs.version.outputs.version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            git fetch --tags --force
+            tagged_sha="$(git rev-list -n 1 "$TAG")"
+            if [[ "$tagged_sha" != "$GITHUB_SHA" ]]; then
+              echo "Version $VERSION is already released from commit $tagged_sha." >&2
+              echo "Bump VERSION before releasing a different commit." >&2
+              exit 1
+            fi
+            echo "Release $TAG already exists for this commit; replacing generated assets."
+          else
+            gh release create "$TAG" \
+              --repo "$GITHUB_REPOSITORY" \
+              --target "$GITHUB_SHA" \
+              --title "FasTris v$VERSION" \
+              --generate-notes
+          fi
+          gh release upload "$TAG" dist/* --clobber --repo "$GITHUB_REPOSITORY"
