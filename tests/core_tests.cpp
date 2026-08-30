@@ -58,8 +58,15 @@ static void test_replay() {
     r.duration_us=100000;
     Game g(r.seed,r.mode,r.rules);for(auto&e:r.events){g.advanceTo(e.time_us);if(e.down)g.press(e.action);else g.release(e.action);}g.advanceTo(r.duration_us);r.final_hash=stateHash(g);
     assert(verifyReplay(r));
-    auto path=(std::filesystem::temp_directory_path()/"fasttris_test.ftr").string();
     std::string err;
+    const std::string encoded=serializeReplay(r);
+    assert(encoded.find("FASTTRIS_REPLAY 1\n")!=std::string::npos);
+    Replay memory_copy;
+    assert(deserializeReplay(encoded,memory_copy,&err));
+    assert(verifyReplay(memory_copy));
+    assert(memory_copy.events.size()==r.events.size());
+
+    auto path=(std::filesystem::temp_directory_path()/"fasttris_test.ftr").string();
     assert(saveReplay(r,path,&err));
     {
         std::ifstream saved(path,std::ios::binary);

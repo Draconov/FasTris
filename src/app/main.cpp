@@ -6,6 +6,8 @@
 #include "fasttris/version.hpp"
 #define SDL_MAIN_USE_CALLBACKS 1
 #include <SDL3/SDL.h>
+#include <SDL3/SDL_dialog.h>
+#include <SDL3/SDL_iostream.h>
 #include <SDL3/SDL_main.h>
 #include <algorithm>
 #include <chrono>
@@ -13,6 +15,8 @@
 #include <filesystem>
 #include <iostream>
 #include <memory>
+#include <mutex>
+#include <optional>
 #include <random>
 #include <string>
 #include <system_error>
@@ -22,7 +26,7 @@ using namespace fasttris;
 using namespace fasttris::app;
 
 namespace {
-enum class Screen { Menu, Game, Settings, Controls, SeedEntry, Help, Replay, CustomSetup };
+enum class Screen { Menu, Game, Settings, Controls, SeedEntry, Help, Replay, ReplayMenu, CustomSetup };
 
 std::uint64_t randomSeed() {
     std::random_device rd;
@@ -96,6 +100,61 @@ std::string preferenceRoot() {
     return out;
 }
 
+enum class ReplayDialogAction { Load, Save };
+struct ReplayDialogResult {
+    ReplayDialogAction action{ReplayDialogAction::Load};
+    std::string path;
+    std::string error;
+    bool canceled{};
+};
+struct ReplayDialogMailbox {
+    std::mutex mutex;
+    std::optional<ReplayDialogResult> pending;
+};
+struct ReplayDialogContext {
+    std::shared_ptr<ReplayDialogMailbox> mailbox;
+    ReplayDialogAction action{ReplayDialogAction::Load};
+};
+
+static const SDL_DialogFileFilter kReplayFilters[]={{"FasTris replay","ftr"}};
+
+void SDLCALL replayDialogCallback(void* userdata,const char* const* filelist,int) {
+    std::unique_ptr<ReplayDialogContext> context(static_cast<ReplayDialogContext*>(userdata));
+    ReplayDialogResult result;
+    result.action=context->action;
+    if(!filelist) result.error=SDL_GetError();
+    else if(!filelist[0]) result.canceled=true;
+    else result.path=filelist[0];
+    std::lock_guard<std::mutex> lock(context->mailbox->mutex);
+    context->mailbox->pending=std::move(result);
+}
+
+bool loadReplayWithSDL(const std::string& path,Replay& replay,std::string& err) {
+    SDL_IOStream* io=SDL_IOFromFile(path.c_str(),"rb");
+    if(!io){err=SDL_GetError();return false;}
+    size_t size=0;
+    void* raw=SDL_LoadFile_IO(io,&size,true);
+    if(!raw){err=SDL_GetError();return false;}
+    constexpr size_t kMaxReplayBytes=32u*1024u*1024u;
+    if(size>kMaxReplayBytes){SDL_free(raw);err="replay file is too large";return false;}
+    std::string text(static_cast<const char*>(raw),size);
+    SDL_free(raw);
+    return deserializeReplay(text,replay,&err);
+}
+
+bool saveReplayWithSDL(const Replay& replay,const std::string& path,std::string& err) {
+    std::string target=path;
+    if(target.find("://")==std::string::npos){
+        std::filesystem::path p(target);
+        if(p.extension().empty()) target += ".ftr";
+    }
+    const std::string text=serializeReplay(replay);
+    SDL_IOStream* io=SDL_IOFromFile(target.c_str(),"wb");
+    if(!io){err=SDL_GetError();return false;}
+    if(!SDL_SaveFile_IO(io,text.data(),text.size(),true)){err=SDL_GetError();return false;}
+    return true;
+}
+
 struct ReplayViewer {
     Replay rep{};
     std::unique_ptr<Game> game;
@@ -109,6 +168,11 @@ struct ReplayViewer {
         if (!loadReplay(path, rep, &err)) return false;
         reset(0);
         return true;
+    }
+
+    void load(Replay replay) {
+        rep = std::move(replay);
+        reset(0);
     }
 
     void reset(TimeUs target) {
@@ -235,10 +299,15 @@ struct RunSession {
         record(t, action, down);
     }
 
+    Replay snapshot() const {
+        Replay out=replay;
+        if(game){out.duration_us=game->now();out.final_hash=stateHash(*game);}
+        return out;
+    }
+
     bool save(const std::string& path) {
         if (!game) return false;
-        replay.duration_us = game->now();
-        replay.final_hash = stateHash(*game);
+        replay=snapshot();
         std::error_code ec;
         const auto parent = std::filesystem::path(path).parent_path();
         if (!parent.empty()) std::filesystem::create_directories(parent, ec);
@@ -289,6 +358,7 @@ struct AppState {
     int settings_sel{};
     int controls_sel{};
     int custom_sel{};
+    int replay_menu_sel{};
     bool rebinding{};
     bool wait_pad{};
     bool fullscreen{};
@@ -300,6 +370,12 @@ struct AppState {
     std::string seed_error;
     std::string config_path;
     std::string last_replay_path;
+    std::string replay_status;
+    std::shared_ptr<ReplayDialogMailbox> replay_dialog_mailbox{std::make_shared<ReplayDialogMailbox>()};
+    bool replay_dialog_open{};
+    bool replay_dialog_paused_run{};
+    bool pending_save_from_game{};
+    std::optional<Replay> pending_replay_save;
     Uint64 frame_start{};
 
     void startRun(Mode mode, Uint64 now) {
@@ -310,6 +386,75 @@ struct AppState {
     bool lastReplayExists() const {
         std::error_code ec;
         return !last_replay_path.empty() && std::filesystem::exists(last_replay_path, ec);
+    }
+
+    void openReplayLoadDialog() {
+        if(replay_dialog_open)return;
+        replay_dialog_open=true;
+        replay_status="CHOOSE A REPLAY FILE";
+        auto* context=new ReplayDialogContext{replay_dialog_mailbox,ReplayDialogAction::Load};
+        SDL_ShowOpenFileDialog(replayDialogCallback,context,win,kReplayFilters,1,nullptr,false);
+    }
+
+    void openReplaySaveDialog(const Replay& replay,Uint64 now,bool from_game) {
+        if(replay_dialog_open)return;
+        pending_replay_save=replay;
+        pending_save_from_game=from_game;
+        replay_dialog_open=true;
+        replay_dialog_paused_run=false;
+        if(from_game&&run.game&&!run.paused){
+            if(run.game->rules().tournament&&!run.game->complete()&&!run.game->gameOver()){
+                replay_dialog_open=false;
+                pending_replay_save.reset();
+                pending_save_from_game=false;
+                run.status="SAVE FILE DISABLED DURING TOURNAMENT RUN";
+                return;
+            }
+            run.togglePause(now);
+            replay_dialog_paused_run=true;
+        }
+        if(from_game)run.status="CHOOSE REPLAY FILE";
+        else replay_status="CHOOSE REPLAY FILE";
+        auto* context=new ReplayDialogContext{replay_dialog_mailbox,ReplayDialogAction::Save};
+        SDL_ShowSaveFileDialog(replayDialogCallback,context,win,kReplayFilters,1,nullptr);
+    }
+
+    void processReplayDialog() {
+        std::optional<ReplayDialogResult> result;
+        {
+            std::lock_guard<std::mutex> lock(replay_dialog_mailbox->mutex);
+            if(replay_dialog_mailbox->pending){result=std::move(replay_dialog_mailbox->pending);replay_dialog_mailbox->pending.reset();}
+        }
+        if(!result)return;
+        replay_dialog_open=false;
+
+        if(result->action==ReplayDialogAction::Load){
+            if(result->canceled){replay_status="LOAD CANCELED";return;}
+            if(!result->error.empty()){replay_status="LOAD DIALOG FAILED: "+result->error;return;}
+            Replay loaded;
+            std::string err;
+            if(!loadReplayWithSDL(result->path,loaded,err)){replay_status="LOAD FAILED: "+err;return;}
+            viewer.load(std::move(loaded));
+            replay_status.clear();
+            screen=Screen::Replay;
+            return;
+        }
+
+        const bool resume_run=replay_dialog_paused_run;
+        replay_dialog_paused_run=false;
+        if(result->canceled){
+            if(pending_save_from_game)run.status="SAVE CANCELED";else replay_status="SAVE CANCELED";
+        }else if(!result->error.empty()){
+            if(pending_save_from_game)run.status="SAVE DIALOG FAILED: "+result->error;else replay_status="SAVE DIALOG FAILED: "+result->error;
+        }else if(pending_replay_save){
+            std::string err;
+            const bool ok=saveReplayWithSDL(*pending_replay_save,result->path,err);
+            if(pending_save_from_game)run.status=ok?"REPLAY SAVED TO FILE":"SAVE FAILED: "+err;
+            else replay_status=ok?"REPLAY SAVED TO FILE":"SAVE FAILED: "+err;
+        }
+        pending_replay_save.reset();
+        pending_save_from_game=false;
+        if(resume_run&&run.game&&run.paused)run.togglePause(SDL_GetTicksNS());
     }
 
     bool initialize(int argc, char** argv, bool& should_exit) {
@@ -470,6 +615,7 @@ struct AppState {
             SDL_SetWindowFullscreen(win, fullscreen);
             return SDL_APP_CONTINUE;
         }
+        if(replay_dialog_open)return SDL_APP_CONTINUE;
 
         if (screen == Screen::SeedEntry) {
             if (ev.type == SDL_EVENT_TEXT_INPUT) {
@@ -531,12 +677,33 @@ struct AppState {
                     } else if (menu_sel == 9) {
                         screen = Screen::Controls;
                     } else if (menu_sel == 10) {
-                        std::string err;
-                        if (lastReplayExists() && viewer.load(last_replay_path, err)) {
-                            screen = Screen::Replay;
-                        }
+                        replay_menu_sel=0;
+                        replay_status.clear();
+                        screen=Screen::ReplayMenu;
                     } else {
                         return SDL_APP_SUCCESS;
+                    }
+                }
+            }
+            return SDL_APP_CONTINUE;
+        }
+
+        if (screen == Screen::ReplayMenu) {
+            if(ev.type==SDL_EVENT_KEY_DOWN&&!ev.key.repeat){
+                const auto key=ev.key.key;
+                if(key==SDLK_ESCAPE){screen=Screen::Menu;replay_status.clear();}
+                else if(key==SDLK_UP)replay_menu_sel=(replay_menu_sel+2)%3;
+                else if(key==SDLK_DOWN)replay_menu_sel=(replay_menu_sel+1)%3;
+                else if(key==SDLK_RETURN||key==SDLK_KP_ENTER){
+                    if(replay_menu_sel==0){
+                        std::string err;
+                        if(lastReplayExists()&&viewer.load(last_replay_path,err)){replay_status.clear();screen=Screen::Replay;}
+                        else replay_status=lastReplayExists()?"LOAD FAILED: "+err:"NO LAST REPLAY";
+                    }else if(replay_menu_sel==1){
+                        openReplayLoadDialog();
+                    }else{
+                        screen=Screen::Menu;
+                        replay_status.clear();
                     }
                 }
             }
@@ -594,13 +761,13 @@ struct AppState {
                     saveConfig(config_path, cfg);
                     screen = Screen::Menu;
                 } else if (key == SDLK_UP) {
-                    settings_sel = (settings_sel + 12) % 13;
+                    settings_sel = (settings_sel + 13) % 14;
                 } else if (key == SDLK_DOWN) {
-                    settings_sel = (settings_sel + 1) % 13;
-                } else if (key == SDLK_R) {
-                    const bool tournament = cfg.rules.tournament;
-                    cfg.rules = Rules{};
-                    cfg.rules.tournament = tournament;
+                    settings_sel = (settings_sel + 1) % 14;
+                } else if ((key == SDLK_RETURN || key == SDLK_KP_ENTER) && settings_sel == 13) {
+                    resetSettings(cfg);
+                    SDL_SetRenderVSync(ren, cfg.vsync ? 1 : 0);
+                    saveConfig(config_path, cfg);
                 } else if (key == SDLK_LEFT || key == SDLK_RIGHT) {
                     const int delta = key == SDLK_RIGHT ? 1 : -1;
                     auto& handling = cfg.rules.handling;
@@ -692,6 +859,7 @@ struct AppState {
                 else if (key == SDLK_4) viewer.speed = 4;
                 else if (key == SDLK_8) viewer.speed = 8;
                 else if (key == SDLK_N) { viewer.nextPiece(); viewer.paused = true; }
+                else if (key == SDLK_F6) { viewer.paused = true; openReplaySaveDialog(viewer.rep, ev.key.timestamp, false); }
             }
             return SDL_APP_CONTINUE;
         }
@@ -719,7 +887,7 @@ struct AppState {
                 }
                 if (key == SDLK_F6) {
                     run.advance(timestamp);
-                    run.save(last_replay_path);
+                    openReplaySaveDialog(run.snapshot(), timestamp, true);
                     return SDL_APP_CONTINUE;
                 }
                 const auto action = keyAction(cfg, key);
@@ -752,6 +920,7 @@ struct AppState {
     SDL_AppResult iterate() {
         frame_start = SDL_GetTicksNS();
         const auto now = frame_start;
+        processReplayDialog();
 
         if (screen == Screen::Game && run.game) {
             run.advance(now);
@@ -773,12 +942,16 @@ struct AppState {
             info.replay_speed = viewer.speed;
             info.replay_paused = viewer.paused;
             info.recent_inputs = viewer.recent();
-            info.status = viewer.rep.final_hash.empty()
-                              ? "UNVERIFIED REPLAY"
-                              : (verifyReplay(viewer.rep) ? "REPLAY VERIFIED" : "REPLAY HASH FAILED");
+            info.status = !replay_status.empty()
+                              ? replay_status
+                              : (viewer.rep.final_hash.empty()
+                                  ? "UNVERIFIED REPLAY"
+                                  : (verifyReplay(viewer.rep) ? "REPLAY VERIFIED" : "REPLAY HASH FAILED"));
             renderGame(ren, *viewer.game, info);
         } else if (screen == Screen::Menu) {
-            renderMenu(ren, menu_sel, seed, cfg.rules.tournament, lastReplayExists());
+            renderMenu(ren, menu_sel, seed, cfg.rules.tournament);
+        } else if (screen == Screen::ReplayMenu) {
+            renderReplayMenu(ren, replay_menu_sel, lastReplayExists(), replay_status);
         } else if (screen == Screen::Settings) {
             renderSettings(ren, cfg, settings_sel);
         } else if (screen == Screen::CustomSetup) {

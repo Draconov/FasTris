@@ -186,11 +186,11 @@ void renderGame(SDL_Renderer*r,Game&g,const RenderInfo&i){
     }
 }
 
-void renderMenu(SDL_Renderer*r,int sel,std::uint64_t seed,bool tournament,bool hasReplay){
+void renderMenu(SDL_Renderer*r,int sel,std::uint64_t seed,bool tournament){
     beginCanvas(r,true);
     set(r,{11,14,20,255});SDL_RenderClear(r);txt(r,350,45,"FASTRIS",{235,240,248,255},true);txt(r,454,50,std::string("v")+fasttris::kVersion,{120,135,155,255});txt(r,276,78,"DETERMINISTIC COMPETITIVE BLOCK ENGINE",{120,135,155,255});
-    static const std::array<const char*,12> items={"SPRINT 40L","ULTRA 2:00","MARATHON 150L","ZEN / ENDLESS","CHEESE RACE 40","FINESSE TRAINER","SEED RACE 40L","CUSTOM / SANDBOX","SETTINGS","CONTROLS / REBIND","PLAY LAST REPLAY","QUIT"};
-    for(int n=0;n<(int)items.size();++n){C c=n==sel?C{120,220,255,255}:C{205,210,220,255};std::string pre=n==sel?"> ":"  ";std::string label=items[n];if(n==10&&!hasReplay)label+=" (NONE YET)";txt(r,310,122+n*31,pre+label,c,true);}
+    static const std::array<const char*,12> items={"SPRINT 40L","ULTRA 2:00","MARATHON 150L","ZEN / ENDLESS","CHEESE RACE 40","FINESSE TRAINER","SEED RACE 40L","CUSTOM / SANDBOX","SETTINGS","CONTROLS / REBIND","REPLAYS","QUIT"};
+    for(int n=0;n<(int)items.size();++n){C c=n==sel?C{120,220,255,255}:C{205,210,220,255};std::string pre=n==sel?"> ":"  ";txt(r,310,122+n*31,pre+items[n],c,true);}
     static const std::array<const char*,8> desc={
         "Clear 40 lines as fast as possible.",
         "Score as high as possible in exactly two minutes.",
@@ -205,12 +205,29 @@ void renderMenu(SDL_Renderer*r,int sel,std::uint64_t seed,bool tournament,bool h
     txtf(r,245,580,{165,175,190,255},"SEED: %llu",(unsigned long long)seed);txt(r,245,600,"E enter seed   R random seed",{130,140,155,255});txt(r,245,620,"T tournament lock",{130,140,155,255});txt(r,435,620,tournament?"ON":"OFF",tournament?C{110,230,160,255}:C{170,175,185,255});txt(r,245,648,"ENTER select   arrows navigate   H help",{130,140,155,255});
 }
 
+void renderReplayMenu(SDL_Renderer*r,int sel,bool hasLast,const std::string&status){
+    beginCanvas(r,true);
+    set(r,{11,14,20,255});SDL_RenderClear(r);
+    txt(r,330,70,"REPLAYS",{235,240,248,255},true);
+    std::array<std::string,3> items={"PLAY LAST REPLAY","LOAD REPLAY FILE","BACK"};
+    if(!hasLast)items[0]+="  [NONE]";
+    for(int n=0;n<3;++n){
+        const bool unavailable=n==0&&!hasLast;
+        C color=n==sel?C{120,220,255,255}:unavailable?C{105,112,125,255}:C{210,215,225,255};
+        txt(r,310,190+n*64,(n==sel?"> ":"  ")+items[n],color,true);
+    }
+    txt(r,250,430,"Saved replay files use the .ftr format.",{155,168,185,255});
+    txt(r,250,458,"Loading verifies the same deterministic replay format used by the viewer.",{155,168,185,255});
+    if(!status.empty())txt(r,250,520,status,{255,205,100,255},true);
+    txt(r,250,610,"UP/DOWN select   ENTER open   ESC back",{135,145,160,255});
+}
+
 void renderSettings(SDL_Renderer*r,const AppConfig&c,int sel){
     beginCanvas(r,true);
-    set(r,{11,14,20,255});SDL_RenderClear(r);txt(r,330,35,"SETTINGS",{235,240,248,255},true);
+    set(r,{11,14,20,255});SDL_RenderClear(r);txt(r,330,28,"SETTINGS",{235,240,248,255},true);
     auto h=c.rules.handling;bool ghost=c.rules.ghost;int next=c.rules.next_count;
     if(c.rules.tournament){h.lock_delay_ms=500;h.max_lock_resets=15;h.allow_180=false;h.irs=true;h.ihs=true;ghost=true;next=5;}
-    std::array<std::string,13> v={
+    std::array<std::string,14> v={
         "DAS       "+std::to_string(h.das_ms)+" ms",
         "ARR       "+std::to_string(h.arr_ms)+" ms"+(h.arr_ms==0?" (INSTANT)":""),
         "SDF       "+std::to_string(h.sdf)+"x"+(h.sdf==0?" (SONIC)":""),
@@ -223,10 +240,16 @@ void renderSettings(SDL_Renderer*r,const AppConfig&c,int sel){
         std::string("GHOST     ")+(ghost?"ON":"OFF"),
         "NEXT      "+std::to_string(next),
         std::string("VSYNC     ")+(c.vsync?"ON":"OFF"),
-        "FPS CAP   "+std::string(c.fps_cap==0?"UNCAPPED":std::to_string(c.fps_cap))
+        "FPS CAP   "+std::string(c.fps_cap==0?"UNCAPPED":std::to_string(c.fps_cap)),
+        "RESET SETTINGS"
     };
-    for(int n=0;n<(int)v.size();++n){const bool locked=c.rules.tournament&&n>=4&&n<=10;std::string label=(n==sel?"> ":"  ")+v[n]+(locked?"  [LOCKED]":"");txt(r,270,86+n*34,label,n==sel?C{120,220,255,255}:locked?C{150,150,155,255}:C{210,215,225,255},true);}
-    static const std::array<const char*,13> hint={
+    for(int n=0;n<(int)v.size();++n){
+        const bool locked=c.rules.tournament&&n>=4&&n<=10;
+        const C normal=n==13?C{245,180,110,255}:C{210,215,225,255};
+        std::string label=(n==sel?"> ":"  ")+v[n]+(locked?"  [LOCKED]":"");
+        txt(r,270,70+n*30,label,n==sel?C{120,220,255,255}:locked?C{150,150,155,255}:normal,true);
+    }
+    static const std::array<const char*,14> hint={
         "DAS: delay before a held horizontal key starts repeating.",
         "ARR: horizontal repeat interval after DAS. 0 intentionally shifts to the wall.",
         "SDF: soft-drop speed multiplier. 0 performs a sonic drop.",
@@ -239,11 +262,12 @@ void renderSettings(SDL_Renderer*r,const AppConfig&c,int sel){
         "Show or hide the landing ghost.",
         "Number of upcoming pieces displayed, from 1 to 8.",
         "Synchronize presentation to the display refresh.",
-        "Render cap when VSync is disabled. 0 means uncapped."
+        "Render cap when VSync is disabled. 0 means uncapped.",
+        "Restore gameplay, display and Custom-mode settings. Key bindings stay unchanged."
     };
-    if(c.rules.tournament)txt(r,250,548,"TOURNAMENT LOCK: standard rule fields use fixed competitive values",{255,190,100,255});
-    txt(r,250,578,hint[std::clamp(sel,0,12)],{150,165,182,255});
-    txt(r,250,620,"LEFT/RIGHT change   R reset gameplay defaults",{135,145,160,255});txt(r,250,640,"ESC saves + back",{135,145,160,255});
+    if(c.rules.tournament)txt(r,245,505,"TOURNAMENT LOCK: fixed competitive values apply during runs",{255,190,100,255});
+    txt(r,245,545,hint[std::clamp(sel,0,13)],{150,165,182,255});
+    txt(r,245,610,sel==13?"ENTER reset settings   ESC saves + back":"LEFT/RIGHT change   ESC saves + back",{135,145,160,255});
 }
 
 void renderCustomSetup(SDL_Renderer*r,const AppConfig&c,int sel){
@@ -272,6 +296,6 @@ void renderControls(SDL_Renderer*r,const AppConfig&c,int sel,bool rebinding,bool
     set(r,{11,14,20,255});SDL_RenderClear(r);txt(r,330,40,"CONTROLS",{235,240,248,255},true);for(int n=0;n<8;++n){auto a=static_cast<Action>(n);std::ostringstream s;s<<actionName(a)<<"   KEY "<<SDL_GetKeyName(c.keys[n])<<"   PAD "<<padName(c.pads[n]);txt(r,220,115+n*55,(n==sel?"> ":"  ")+s.str(),n==sel?C{120,220,255,255}:C{210,215,225,255},true);}if(rebinding)txt(r,225,590,waitpad?"PRESS A GAMEPAD BUTTON (ESC CANCELS)":"PRESS A KEY (G = BIND GAMEPAD INSTEAD)",{255,205,100,255},true);else txt(r,225,590,"ENTER rebind keyboard   G rebind gamepad   ESC back",{135,145,160,255});
 }
 void renderSeedEntry(SDL_Renderer*r,const std::string&t,const std::string&e){beginCanvas(r,true);set(r,{11,14,20,255});SDL_RenderClear(r);txt(r,315,210,"ENTER 64-BIT SEED",{235,240,248,255},true);outline(r,245,280,470,70,{80,95,120,255});txt(r,270,302,t.empty()?"_":t,{120,220,255,255},true);if(!e.empty())txt(r,270,380,e,{255,110,110,255});txt(r,270,420,"ENTER accept   ESC cancel",{135,145,160,255});}
-void renderHelp(SDL_Renderer*r){beginCanvas(r,true);set(r,{11,14,20,255});SDL_RenderClear(r);txt(r,360,35,"HELP",{235,240,248,255},true);std::array<const char*,17> l={"Gameplay uses SDL event nanosecond timestamps.","OS key repeat is ignored; DAS/ARR are engine-driven.","Same seed + rules + input events = same simulation.","","Default keys:","Arrows: left/right/down    Space: hard drop","Up: rotate CW             Z: rotate CCW","A: rotate 180             C: hold","P: pause                  F5: restart","F6: save replay           ESC: menu","","Replay viewer:","Space pause, Left/Right seek 1 second","1/2/4/8 playback speed, N jump to next hard drop","","Command line: --seed N --mode sprint --replay file","--verify file --tournament --help"};for(int n=0;n<(int)l.size();++n)txt(r,160,105+n*30,l[n],{190,198,210,255},n<3);txt(r,160,660,"ESC back",{130,140,155,255});}
+void renderHelp(SDL_Renderer*r){beginCanvas(r,true);set(r,{11,14,20,255});SDL_RenderClear(r);txt(r,360,35,"HELP",{235,240,248,255},true);std::array<const char*,17> l={"Gameplay uses SDL event nanosecond timestamps.","OS key repeat is ignored; DAS/ARR are engine-driven.","Same seed + rules + input events = same simulation.","","Default keys:","Arrows: left/right/down    Space: hard drop","Up: rotate CW             Z: rotate CCW","A: rotate 180             C: hold","P: pause                  F5: restart","F6: save replay to file   ESC: menu","","Replay viewer:","Space pause, Left/Right seek 1 second","1/2/4/8 speed, N next piece, F6 save copy","","Command line: --seed N --mode sprint --replay file","--verify file --tournament --help"};for(int n=0;n<(int)l.size();++n)txt(r,160,105+n*30,l[n],{190,198,210,255},n<3);txt(r,160,660,"ESC back",{130,140,155,255});}
 
 } // namespace fasttris::app

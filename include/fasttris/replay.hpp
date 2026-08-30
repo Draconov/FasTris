@@ -1,6 +1,7 @@
 #pragma once
 #include "game.hpp"
 #include <string>
+#include <string_view>
 #include <vector>
 namespace fasttris {
 struct ReplayEvent { TimeUs time_us{}; Action action{Action::Left}; bool down{}; };
@@ -9,6 +10,8 @@ struct Replay {
     std::vector<ReplayEvent> events;std::string final_hash;
 };
 std::string stateHash(const Game& game);
+std::string serializeReplay(const Replay& replay);
+bool deserializeReplay(std::string_view text, Replay& out, std::string* error=nullptr);
 bool saveReplay(const Replay& r,const std::string& path,std::string* error=nullptr);
 bool loadReplay(const std::string& path,Replay& out,std::string* error=nullptr);
 bool verifyReplay(const Replay& r,std::string* actual_hash=nullptr);

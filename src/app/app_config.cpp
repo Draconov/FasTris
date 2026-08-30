@@ -84,6 +84,13 @@ bool saveConfig(const std::string&path,const AppConfig&c){
     for(std::size_t i=0;i<c.pads.size();++i)f<<"pad"<<i<<'='<<c.pads[i]<<"\n";
     return bool(f);
 }
+
+void resetSettings(AppConfig& c){
+    const AppConfig defaults=defaultConfig();
+    c.rules=defaults.rules;
+    c.vsync=defaults.vsync;
+    c.fps_cap=defaults.fps_cap;
+}
 const char* padName(int b){
     switch(static_cast<SDL_GamepadButton>(b)){
         case SDL_GAMEPAD_BUTTON_SOUTH:return "A/SOUTH";case SDL_GAMEPAD_BUTTON_EAST:return "B/EAST";case SDL_GAMEPAD_BUTTON_WEST:return "X/WEST";case SDL_GAMEPAD_BUTTON_NORTH:return "Y/NORTH";case SDL_GAMEPAD_BUTTON_BACK:return "BACK";case SDL_GAMEPAD_BUTTON_GUIDE:return "GUIDE";case SDL_GAMEPAD_BUTTON_START:return "START";case SDL_GAMEPAD_BUTTON_LEFT_STICK:return "L3";case SDL_GAMEPAD_BUTTON_RIGHT_STICK:return "R3";case SDL_GAMEPAD_BUTTON_LEFT_SHOULDER:return "LB";case SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER:return "RB";case SDL_GAMEPAD_BUTTON_DPAD_UP:return "DPAD UP";case SDL_GAMEPAD_BUTTON_DPAD_DOWN:return "DPAD DOWN";case SDL_GAMEPAD_BUTTON_DPAD_LEFT:return "DPAD LEFT";case SDL_GAMEPAD_BUTTON_DPAD_RIGHT:return "DPAD RIGHT";default:return "UNBOUND";
