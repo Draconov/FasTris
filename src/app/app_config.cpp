@@ -5,7 +5,6 @@
 
 namespace fasttris::app {
 namespace {
-constexpr int kConfigVersion = 2;
 constexpr std::size_t ix(Action a){return static_cast<std::size_t>(a);}
 void clampConfig(AppConfig&c){
     auto&h=c.rules.handling;
@@ -27,14 +26,12 @@ AppConfig defaultConfig(){
 }
 bool loadConfig(const std::string&path,AppConfig&c){
     std::ifstream f(path);if(!f)return false;
-    int config_version=1;
     std::string line;
     while(std::getline(f,line)){
         auto p=line.find('=');if(p==std::string::npos)continue;auto k=line.substr(0,p),v=line.substr(p+1);
         try{
             int n=std::stoi(v);auto&h=c.rules.handling;
-            if(k=="config_version")config_version=n;
-            else if(k=="das")h.das_ms=n;
+            if(k=="das")h.das_ms=n;
             else if(k=="arr")h.arr_ms=n;
             else if(k=="sdf")h.sdf=n;
             else if(k=="dcd")h.dcd_ms=n;
@@ -53,22 +50,11 @@ bool loadConfig(const std::string&path,AppConfig&c){
         }catch(...){}
     }
 
-    // v0.1.0 originally shipped DAS=100 / ARR=0. ARR=0 is intentionally an
-    // instant auto-shift expert setting, but as the untouched default it makes
-    // an ordinary key hold look like a teleport. Only migrate the exact old
-    // default handling tuple so deliberate custom zero-ARR setups are preserved.
-    auto&h=c.rules.handling;
-    if(config_version<2 && h.das_ms==100 && h.arr_ms==0 && h.sdf==20 && h.dcd_ms==0 &&
-       h.lock_delay_ms==500 && h.max_lock_resets==15){
-        h.das_ms=140;
-        h.arr_ms=25;
-    }
     clampConfig(c);return true;
 }
 bool saveConfig(const std::string&path,const AppConfig&c){
     std::ofstream f(path);if(!f)return false;const auto&h=c.rules.handling;
-    f<<"config_version="<<kConfigVersion
-     <<"\ndas="<<h.das_ms
+    f<<"das="<<h.das_ms
      <<"\narr="<<h.arr_ms
      <<"\nsdf="<<h.sdf
      <<"\ndcd="<<h.dcd_ms
