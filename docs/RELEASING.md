@@ -9,8 +9,10 @@ The intended public repository is `https://github.com/Draconov/FasTris`. The rel
 1. Change `VERSION`, for example from `0.1.0` to `0.2.0`.
 2. Commit the version change together with the code you want in that release.
 3. Push the commit to `main`.
-4. `.github/workflows/release.yml` builds every release target.
-5. Only after all platform builds succeed, the workflow creates/updates GitHub Release `vX.Y.Z` and uploads the packages.
+4. `.github/workflows/release.yml` notices that `vX.Y.Z` does not exist and builds every release target.
+5. Only after all platform builds succeed, the workflow creates GitHub Release `vX.Y.Z` and uploads the packages.
+
+The release workflow checks every push to `main`, but it immediately skips platform release jobs when the current `VERSION` is already tagged. This also means a failed first release can be fixed and retried by pushing the CI fix without changing `VERSION`.
 
 Do **not** edit version numbers in CMake, Gradle, source code, or workflow artifact names. They all read `VERSION`.
 
@@ -55,4 +57,4 @@ The workflow creates a universal macOS `.app` automatically. It is unsigned/not 
 
 ## Manual rebuild of a release
 
-Run the `release` workflow with **Run workflow**. If `vX.Y.Z` already exists, generated assets are replaced with the rebuilt ones instead of creating a duplicate release.
+Run the `release` workflow with **Run workflow**. Manual rebuilds are allowed only when `vX.Y.Z` already points to the selected `main` commit; generated assets are then replaced instead of creating a duplicate release.

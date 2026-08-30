@@ -3,8 +3,6 @@ name: release
 on:
   push:
     branches: [main]
-    paths:
-      - VERSION
   workflow_dispatch:
 
 permissions:
@@ -26,6 +24,7 @@ jobs:
     outputs:
       version: ${{ steps.version.outputs.version }}
       tag: ${{ steps.version.outputs.tag }}
+      release_needed: ${{ steps.version.outputs.release_needed }}
     steps:
       - uses: actions/checkout@v6
         with:
@@ -49,21 +48,36 @@ jobs:
           fi
           TAG="v$VERSION"
 
+          release_needed=true
           if git rev-parse -q --verify "refs/tags/$TAG" >/dev/null; then
             tagged_sha="$(git rev-list -n 1 "$TAG")"
-            if [[ "$tagged_sha" != "$GITHUB_SHA" ]]; then
-              echo "$TAG already points to $tagged_sha, not $GITHUB_SHA." >&2
-              echo "Bump VERSION instead of moving a published version tag." >&2
-              exit 1
+            if [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" ]]; then
+              if [[ "$tagged_sha" != "$GITHUB_SHA" ]]; then
+                echo "$TAG already points to $tagged_sha, not $GITHUB_SHA." >&2
+                echo "Bump VERSION before manually releasing a different commit." >&2
+                exit 1
+              fi
+              echo "Manual rebuild requested for existing $TAG at $GITHUB_SHA."
+            else
+              release_needed=false
+              if [[ "$tagged_sha" == "$GITHUB_SHA" ]]; then
+                echo "$TAG already exists for this commit; no new release is needed."
+              else
+                echo "$TAG is already published from $tagged_sha; this push keeps VERSION=$VERSION and will not create another release."
+              fi
             fi
           fi
 
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
-          echo "Releasing FasTris $VERSION"
+          echo "release_needed=$release_needed" >> "$GITHUB_OUTPUT"
+          if [[ "$release_needed" == "true" ]]; then
+            echo "Preparing FasTris $VERSION"
+          fi
 
   tests:
     needs: version
+    if: needs.version.outputs.release_needed == 'true'
     runs-on: ubuntu-22.04
     timeout-minutes: 15
     steps:
@@ -77,6 +91,7 @@ jobs:
 
   windows:
     needs: version
+    if: needs.version.outputs.release_needed == 'true'
     runs-on: windows-2022
     timeout-minutes: 35
     steps:
@@ -111,6 +126,7 @@ jobs:
 
   linux:
     needs: version
+    if: needs.version.outputs.release_needed == 'true'
     runs-on: ubuntu-22.04
     timeout-minutes: 35
     steps:
@@ -121,7 +137,7 @@ jobs:
           sudo apt-get install -y ninja-build \
             libasound2-dev libpulse-dev libdbus-1-dev libudev-dev \
             libx11-dev libxext-dev libxrandr-dev libxcursor-dev libxi-dev \
-            libxfixes-dev libxss-dev libwayland-dev libxkbcommon-dev \
+            libxfixes-dev libxss-dev libxtst-dev libwayland-dev libxkbcommon-dev \
             libdrm-dev libgbm-dev libgl1-mesa-dev libegl1-mesa-dev
       - name: Configure
         run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DFASTTRIS_BUILD_TESTS=OFF
@@ -148,6 +164,7 @@ jobs:
 
   macos:
     needs: version
+    if: needs.version.outputs.release_needed == 'true'
     runs-on: macos-15
     timeout-minutes: 35
     steps:
@@ -161,7 +178,10 @@ jobs:
           set -euo pipefail
           BIN="build/FasTris.app/Contents/MacOS/FasTris"
           test -x "$BIN"
-          lipo -verify_arch x86_64 arm64 "$BIN"
+          ARCHS="$(lipo -archs "$BIN")"
+          echo "Architectures: $ARCHS"
+          echo "$ARCHS" | tr ' ' '\n' | grep -Fxq x86_64
+          echo "$ARCHS" | tr ' ' '\n' | grep -Fxq arm64
       - name: Package
         shell: bash
         run: |
@@ -180,6 +200,7 @@ jobs:
 
   web:
     needs: version
+    if: needs.version.outputs.release_needed == 'true'
     runs-on: ubuntu-22.04
     timeout-minutes: 35
     steps:
@@ -215,6 +236,7 @@ jobs:
 
   android:
     needs: version
+    if: needs.version.outputs.release_needed == 'true'
     runs-on: ubuntu-22.04
     timeout-minutes: 40
     env:
@@ -239,7 +261,7 @@ jobs:
           sdkmanager "platforms;android-35" "build-tools;35.0.0" "ndk;28.2.13676358" "cmake;3.22.1"
       - name: Download pinned SDL3 Android archive
         shell: bash
-        run: scripts/prepare_sdl_android.sh
+        run: bash scripts/prepare_sdl_android.sh
       - name: Configure Android release signing when secrets exist
         shell: bash
         run: |
@@ -292,6 +314,7 @@ jobs:
 
   release:
     needs: [version, tests, windows, linux, macos, web, android]
+    if: needs.version.outputs.release_needed == 'true'
     permissions:
       contents: write
     runs-on: ubuntu-22.04

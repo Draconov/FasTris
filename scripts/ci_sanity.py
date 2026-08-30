@@ -52,6 +52,18 @@ for rel, needles in checks.items():
         if needle not in text:
             fail(f"{rel} is missing expected identity marker: {needle}")
 
+
+# CI regression checks for platform-specific failures seen on clean GitHub runners.
+build_workflow = (ROOT / ".github/workflows/build.yml").read_text(encoding="utf-8")
+release_workflow = (ROOT / ".github/workflows/release.yml").read_text(encoding="utf-8")
+for name, workflow in [("build.yml", build_workflow), ("release.yml", release_workflow)]:
+    if "libxtst-dev" not in workflow:
+        fail(f"{name} must install libxtst-dev for SDL X11/XTEST builds")
+    if "bash scripts/prepare_sdl_android.sh" not in workflow:
+        fail(f"{name} must invoke prepare_sdl_android.sh through bash so Git file-mode loss cannot break Android CI")
+    if "lipo -verify_arch" in workflow:
+        fail(f"{name} uses the fragile/incorrect lipo -verify_arch invocation; verify lipo -archs output instead")
+
 if errors:
     for error in errors:
         print(f"ERROR: {error}", file=sys.stderr)
