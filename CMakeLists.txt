@@ -108,6 +108,7 @@ if(FASTTRIS_BUILD_APP)
             "SHELL:--shell-file ${CMAKE_CURRENT_SOURCE_DIR}/platform/web/shell.html"
             "SHELL:-sALLOW_MEMORY_GROWTH=1"
             "SHELL:-sMAXIMUM_MEMORY=1073741824"
+            "SHELL:-sEXPORTED_RUNTIME_METHODS=ccall"
         )
     endif()
 endif()

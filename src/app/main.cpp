@@ -22,6 +22,9 @@
 #include <string>
 #include <system_error>
 #include <vector>
+#if defined(__EMSCRIPTEN__)
+#include <emscripten/emscripten.h>
+#endif
 
 using namespace fasttris;
 using namespace fasttris::app;
@@ -105,6 +108,7 @@ enum class ReplayDialogAction { Load, Save };
 struct ReplayDialogResult {
     ReplayDialogAction action{ReplayDialogAction::Load};
     std::string path;
+    std::optional<std::string> contents;
     std::string error;
     bool canceled{};
 };
@@ -116,6 +120,86 @@ struct ReplayDialogContext {
     std::shared_ptr<ReplayDialogMailbox> mailbox;
     ReplayDialogAction action{ReplayDialogAction::Load};
 };
+
+#if defined(__EMSCRIPTEN__)
+std::weak_ptr<ReplayDialogMailbox> g_web_replay_mailbox;
+
+void postWebReplayResult(ReplayDialogResult result) {
+    if (auto mailbox = g_web_replay_mailbox.lock()) {
+        std::lock_guard<std::mutex> lock(mailbox->mutex);
+        mailbox->pending = std::move(result);
+    }
+}
+
+EM_JS(void, webChooseReplayFile, (), {
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = '.ftr,application/octet-stream,text/plain';
+    input.style.display = 'none';
+    let settled = false;
+
+    const cleanup = () => {
+        window.removeEventListener('focus', onWindowFocus);
+        input.remove();
+    };
+    const cancel = () => {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        Module.ccall('fastris_web_replay_canceled', null, [], []);
+    };
+    const onWindowFocus = () => {
+        setTimeout(() => {
+            if (!settled && (!input.files || input.files.length === 0)) cancel();
+        }, 350);
+    };
+
+    input.addEventListener('change', () => {
+        if (settled) return;
+        const file = input.files && input.files[0];
+        if (!file) { cancel(); return; }
+        settled = true;
+        window.removeEventListener('focus', onWindowFocus);
+
+        if (file.size > 32 * 1024 * 1024) {
+            cleanup();
+            Module.ccall('fastris_web_replay_error', null, ['string'], ['replay file is too large']);
+            return;
+        }
+
+        const reader = new FileReader();
+        reader.onload = () => {
+            const text = typeof reader.result === 'string' ? reader.result : '';
+            cleanup();
+            Module.ccall('fastris_web_replay_loaded', null, ['string'], [text]);
+        };
+        reader.onerror = () => {
+            cleanup();
+            Module.ccall('fastris_web_replay_error', null, ['string'], ['browser could not read replay file']);
+        };
+        reader.readAsText(file);
+    });
+
+    document.body.appendChild(input);
+    window.addEventListener('focus', onWindowFocus);
+    input.click();
+});
+
+EM_JS(void, webDownloadReplayFile, (const char* filename, const char* contents), {
+    const name = UTF8ToString(filename);
+    const text = UTF8ToString(contents);
+    const blob = new Blob([text], {type: 'application/octet-stream'});
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement('a');
+    anchor.href = url;
+    anchor.download = name;
+    anchor.style.display = 'none';
+    document.body.appendChild(anchor);
+    anchor.click();
+    anchor.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+});
+#endif
 
 static const SDL_DialogFileFilter kReplayFilters[]={{"FasTris replay","ftr"}};
 
@@ -395,24 +479,35 @@ struct AppState {
         if(replay_dialog_open)return;
         replay_dialog_open=true;
         replay_status="CHOOSE A REPLAY FILE";
+#if defined(__EMSCRIPTEN__)
+        g_web_replay_mailbox=replay_dialog_mailbox;
+        webChooseReplayFile();
+#else
         auto* context=new ReplayDialogContext{replay_dialog_mailbox,ReplayDialogAction::Load};
         SDL_ShowOpenFileDialog(replayDialogCallback,context,win,kReplayFilters,1,nullptr,false);
+#endif
     }
 
     void openReplaySaveDialog(const Replay& replay,Uint64 now,bool from_game) {
         if(replay_dialog_open)return;
+        if(from_game&&run.game&&run.game->rules().tournament&&!run.game->complete()&&!run.game->gameOver()){
+            run.status="SAVE FILE DISABLED DURING TOURNAMENT RUN";
+            return;
+        }
+#if defined(__EMSCRIPTEN__)
+        const std::string text=serializeReplay(replay);
+        const std::string filename="FasTris-Replay-"+std::to_string(replay.seed)+".ftr";
+        webDownloadReplayFile(filename.c_str(),text.c_str());
+        if(from_game)run.status="REPLAY DOWNLOAD STARTED";
+        else replay_status="REPLAY DOWNLOAD STARTED";
+        (void)now;
+        return;
+#else
         pending_replay_save=replay;
         pending_save_from_game=from_game;
         replay_dialog_open=true;
         replay_dialog_paused_run=false;
         if(from_game&&run.game&&!run.paused){
-            if(run.game->rules().tournament&&!run.game->complete()&&!run.game->gameOver()){
-                replay_dialog_open=false;
-                pending_replay_save.reset();
-                pending_save_from_game=false;
-                run.status="SAVE FILE DISABLED DURING TOURNAMENT RUN";
-                return;
-            }
             run.togglePause(now);
             replay_dialog_paused_run=true;
         }
@@ -420,6 +515,7 @@ struct AppState {
         else replay_status="CHOOSE REPLAY FILE";
         auto* context=new ReplayDialogContext{replay_dialog_mailbox,ReplayDialogAction::Save};
         SDL_ShowSaveFileDialog(replayDialogCallback,context,win,kReplayFilters,1,nullptr);
+#endif
     }
 
     void processReplayDialog() {
@@ -436,7 +532,10 @@ struct AppState {
             if(!result->error.empty()){replay_status="LOAD DIALOG FAILED: "+result->error;return;}
             Replay loaded;
             std::string err;
-            if(!loadReplayWithSDL(result->path,loaded,err)){replay_status="LOAD FAILED: "+err;return;}
+            const bool ok=result->contents
+                ? deserializeReplay(*result->contents,loaded,&err)
+                : loadReplayWithSDL(result->path,loaded,err);
+            if(!ok){replay_status="LOAD FAILED: "+err;return;}
             viewer.load(std::move(loaded));
             replay_status.clear();
             screen=Screen::Replay;
@@ -1143,6 +1242,30 @@ struct AppState {
     }
 };
 } // namespace
+
+#if defined(__EMSCRIPTEN__)
+extern "C" EMSCRIPTEN_KEEPALIVE void fastris_web_replay_loaded(const char* text) {
+    ReplayDialogResult result;
+    result.action=ReplayDialogAction::Load;
+    if(text) result.contents=std::string(text);
+    else result.error="browser returned an empty replay";
+    postWebReplayResult(std::move(result));
+}
+
+extern "C" EMSCRIPTEN_KEEPALIVE void fastris_web_replay_canceled() {
+    ReplayDialogResult result;
+    result.action=ReplayDialogAction::Load;
+    result.canceled=true;
+    postWebReplayResult(std::move(result));
+}
+
+extern "C" EMSCRIPTEN_KEEPALIVE void fastris_web_replay_error(const char* message) {
+    ReplayDialogResult result;
+    result.action=ReplayDialogAction::Load;
+    result.error=message?message:"browser replay picker failed";
+    postWebReplayResult(std::move(result));
+}
+#endif
 
 SDL_AppResult SDL_AppInit(void** appstate, int argc, char** argv) {
     auto* state = new AppState();
