@@ -16,6 +16,10 @@ void setError(std::string* err, std::string_view message) {
     if (err) *err = std::string(message);
 }
 
+bool replayActionAllowed(Action a) {
+    return static_cast<std::uint8_t>(a) <= static_cast<std::uint8_t>(Action::Hold);
+}
+
 class ByteWriter {
 public:
     void reserve(std::size_t size) { data_.reserve(size); }
@@ -34,41 +38,6 @@ public:
     std::string take() { return std::move(data_); }
 private:
     std::string data_;
-};
-
-class ByteReader {
-public:
-    explicit ByteReader(std::string_view bytes)
-        : cur_(reinterpret_cast<const std::uint8_t*>(bytes.data())),
-          end_(cur_ + bytes.size()) {}
-
-    bool raw(void* out, std::size_t size) {
-        if (remaining() < size) return false;
-        std::memcpy(out, cur_, size);
-        cur_ += size;
-        return true;
-    }
-    bool byte(std::uint8_t& out) {
-        if (cur_ == end_) return false;
-        out = *cur_++;
-        return true;
-    }
-    bool var(std::uint64_t& out) {
-        out = 0;
-        for (unsigned shift = 0; shift < 64; shift += 7) {
-            std::uint8_t b{};
-            if (!byte(b)) return false;
-            if (shift == 63 && (b & 0xfeu) != 0) return false;
-            out |= std::uint64_t(b & 0x7fu) << shift;
-            if ((b & 0x80u) == 0) return true;
-        }
-        return false;
-    }
-    std::size_t remaining() const { return static_cast<std::size_t>(end_ - cur_); }
-    bool empty() const { return cur_ == end_; }
-private:
-    const std::uint8_t* cur_{};
-    const std::uint8_t* end_{};
 };
 
 template <class T>
@@ -138,47 +107,22 @@ void writeRules(ByteWriter& w,const Rules& r){
     w.var(static_cast<std::uint64_t>(r.custom_start_garbage));
 }
 
-bool readBoundedVar(ByteReader& rd,std::uint64_t max,int& out){
-    std::uint64_t v{};
-    if(!rd.var(v)||v>max)return false;
-    out=static_cast<int>(v);
-    return true;
-}
-
-bool readRules(ByteReader& rd,Rules& r){
-    auto& h=r.handling;
-    if(!readBoundedVar(rd,5000,h.das_ms))return false;
-    if(!readBoundedVar(rd,5000,h.arr_ms))return false;
-    if(!readBoundedVar(rd,1000,h.sdf))return false;
-    if(!readBoundedVar(rd,5000,h.dcd_ms))return false;
-    if(!readBoundedVar(rd,10000,h.lock_delay_ms))return false;
-    if(!readBoundedVar(rd,1000,h.max_lock_resets))return false;
-    std::uint8_t flags{};
-    if(!rd.byte(flags)||(flags&0xe0u)!=0)return false;
-    h.allow_180=(flags&0x01u)!=0;
-    h.irs=(flags&0x02u)!=0;
-    h.ihs=(flags&0x04u)!=0;
-    r.ghost=(flags&0x08u)!=0;
-    r.tournament=(flags&0x10u)!=0;
-    if(!readBoundedVar(rd,8,r.next_count)||r.next_count<1)return false;
-    if(!readBoundedVar(rd,100,r.garbage_cap))return false;
-    if(!readBoundedVar(rd,60000,r.garbage_delay_ms))return false;
-    if(!readBoundedVar(rd,100,r.garbage_messiness_pct))return false;
-    if(!readBoundedVar(rd,60000,r.custom_gravity_ms))return false;
-    if(!readBoundedVar(rd,1000000,r.custom_line_goal))return false;
-    if(!readBoundedVar(rd,43200,r.custom_time_limit_s))return false;
-    if(!readBoundedVar(rd,12,r.custom_start_garbage))return false;
-    return true;
-}
-
-void addRepeatedMarkers(std::vector<ReplayMarker>& out,int before,int after,TimeUs at,std::size_t next_event){
-    for(int value=before+1;value<=after;++value)out.push_back({at,next_event,value});
+TimeUs checkpointIntervalFor(TimeUs duration_us) {
+    if(duration_us<=0)return kReplayCheckpointBaseIntervalUs;
+    const std::uint64_t segments=std::max<std::uint64_t>(1,kMaxReplayCheckpoints-1u);
+    const auto duration=static_cast<std::uint64_t>(duration_us);
+    const auto needed=(duration+segments-1u)/segments;
+    TimeUs interval=std::max<TimeUs>(kReplayCheckpointBaseIntervalUs,static_cast<TimeUs>(needed));
+    // Round long-replay intervals up to a whole second. This keeps checkpoint
+    // times human-readable and guarantees the hard count bound after rounding.
+    constexpr TimeUs second=1'000'000;
+    if(interval>kReplayCheckpointBaseIntervalUs)interval=((interval+second-1)/second)*second;
+    return interval;
 }
 
 } // namespace
 
-
-std::string stateHash(const Game& g){
+Sha256Digest stateHash(const Game& g){
     Sha256 h;
     static constexpr std::string_view tag="FASTRIS_STATE_BINARY_1";
     h.update(tag);
@@ -218,7 +162,7 @@ std::string stateHash(const Game& g){
     hashBool(h,g.rot180_held_);hashBool(h,g.hold_held_);hashI32(h,g.horiz_dir_);hashI32(h,g.outgoing_attack_);hashI32(h,g.last_attack_visual_);
     hashBool(h,g.last_action_rotation_);hashI32(h,g.last_kick_index_);hashByte(h,static_cast<std::uint8_t>(g.last_clear_));
     hashI32(h,g.piece_input_count_);hashI32(h,g.piece_spawn_x_);hashByte(h,static_cast<std::uint8_t>(g.piece_spawn_rot_));
-    return h.finalHex();
+    return h.finalBytes();
 }
 
 bool validateReplay(const Replay& r,std::string* err){
@@ -229,13 +173,12 @@ bool validateReplay(const Replay& r,std::string* err){
     TimeUs previous=0;
     bool first=true;
     for(const auto& e:r.events){
-        if(static_cast<std::uint8_t>(e.action)>=static_cast<std::uint8_t>(Action::Count)){setError(err,"replay contains an invalid action");return false;}
+        if(!replayActionAllowed(e.action)){setError(err,"replay contains a non-gameplay action");return false;}
         if(e.time_us<0||e.time_us>r.duration_us){setError(err,"replay event is outside replay duration");return false;}
         if(!first&&e.time_us<previous){setError(err,"replay events are not monotonic");return false;}
         first=false;previous=e.time_us;
     }
-    std::array<std::uint8_t,32> hash{};
-    if(!parseHex32(r.final_hash,hash)){setError(err,"replay hash is not a valid SHA-256 value");return false;}
+    if(!r.final_hash.has_value()){setError(err,"replay is missing its final SHA-256 hash");return false;}
     return true;
 }
 
@@ -257,52 +200,143 @@ std::string serializeReplay(const Replay&r){
         w.byte(static_cast<std::uint8_t>(action|(e.down?0x80u:0u)));
         previous=e.time_us;
     }
-    std::array<std::uint8_t,32> hash{};
-    if(!parseHex32(r.final_hash,hash))return {};
-    w.raw(hash.data(),hash.size());
+    w.raw(r.final_hash->data(),r.final_hash->size());
     return w.take();
 }
 
-bool deserializeReplay(std::string_view bytes,Replay& out,std::string* err){
-    out=Replay{};
-    if(bytes.size()>kMaxReplayBytes){setError(err,"replay file is too large");return false;}
-    ByteReader rd(bytes);
-    std::array<std::uint8_t,kReplayMagic.size()> magic{};
-    if(!rd.raw(magic.data(),magic.size())||magic!=kReplayMagic){setError(err,"unsupported replay format");return false;}
+ReplayDecoder::ReplayDecoder(std::span<const std::uint8_t> bytes):bytes_(bytes){
+    if(bytes_.size()>kMaxReplayBytes)fail("replay file is too large");
+}
 
-    std::uint64_t seed{};
-    if(!rd.var(seed)){setError(err,"truncated replay seed");return false;}
-    out.seed=seed;
-    std::uint8_t mode{};
-    if(!rd.byte(mode)||mode>static_cast<std::uint8_t>(Mode::Custom)){setError(err,"invalid replay mode");return false;}
-    out.mode=static_cast<Mode>(mode);
-    if(!readRules(rd,out.rules)){setError(err,"invalid replay rules");return false;}
+void ReplayDecoder::fail(std::string_view message){
+    if(error_.empty())error_=std::string(message);
+    finished_=true;
+}
 
-    std::uint64_t duration{};
-    if(!rd.var(duration)||duration>static_cast<std::uint64_t>(kMaxReplayDurationUs)){setError(err,"invalid replay duration");return false;}
-    out.duration_us=static_cast<TimeUs>(duration);
-    std::uint64_t event_count{};
-    if(!rd.var(event_count)||event_count>kMaxReplayEvents){setError(err,"invalid replay event count");return false;}
-    out.events.clear();out.events.reserve(static_cast<std::size_t>(event_count));
+bool ReplayDecoder::readByte(std::uint8_t& out){
+    if(pos_>=bytes_.size())return false;
+    out=bytes_[pos_++];
+    return true;
+}
 
-    std::uint64_t timestamp=0;
-    for(std::uint64_t i=0;i<event_count;++i){
-        std::uint64_t delta{};std::uint8_t packed{};
-        if(!rd.var(delta)||!rd.byte(packed)){setError(err,"truncated replay event data");return false;}
-        if((packed&0x70u)!=0){setError(err,"invalid replay event flags");return false;}
-        const auto action=static_cast<std::uint8_t>(packed&0x0fu);
-        if(action>=static_cast<std::uint8_t>(Action::Count)){setError(err,"invalid replay action");return false;}
-        if(delta>std::numeric_limits<std::uint64_t>::max()-timestamp){setError(err,"replay timestamp overflow");return false;}
-        timestamp+=delta;
-        if(timestamp>duration||timestamp>static_cast<std::uint64_t>(std::numeric_limits<TimeUs>::max())){setError(err,"replay event is outside replay duration");return false;}
-        out.events.push_back({static_cast<TimeUs>(timestamp),static_cast<Action>(action),(packed&0x80u)!=0});
+bool ReplayDecoder::readRaw(void* out,std::size_t size){
+    if(size>bytes_.size()-std::min(pos_,bytes_.size()))return false;
+    std::memcpy(out,bytes_.data()+pos_,size);
+    pos_+=size;
+    return true;
+}
+
+bool ReplayDecoder::readVar(std::uint64_t& out){
+    out=0;
+    for(unsigned shift=0;shift<64;shift+=7){
+        std::uint8_t b{};
+        if(!readByte(b))return false;
+        if(shift==63&&(b&0xfeu)!=0)return false;
+        out|=std::uint64_t(b&0x7fu)<<shift;
+        if((b&0x80u)==0)return true;
     }
+    return false;
+}
 
-    std::array<std::uint8_t,32> hash{};
-    if(!rd.raw(hash.data(),hash.size())){setError(err,"truncated replay hash");return false;}
-    if(!rd.empty()){setError(err,"unexpected trailing replay data");return false;}
-    out.final_hash=hexLower(hash.data(),hash.size());
-    if(!validateReplay(out,err))return false;
+bool ReplayDecoder::readBoundedVar(std::uint64_t max,int& out){
+    std::uint64_t v{};
+    if(!readVar(v)||v>max)return false;
+    out=static_cast<int>(v);
+    return true;
+}
+
+bool ReplayDecoder::readRules(){
+    auto& r=replay_.rules;
+    auto& h=r.handling;
+    if(!readBoundedVar(5000,h.das_ms))return false;
+    if(!readBoundedVar(5000,h.arr_ms))return false;
+    if(!readBoundedVar(1000,h.sdf))return false;
+    if(!readBoundedVar(5000,h.dcd_ms))return false;
+    if(!readBoundedVar(10000,h.lock_delay_ms))return false;
+    if(!readBoundedVar(1000,h.max_lock_resets))return false;
+    std::uint8_t flags{};
+    if(!readByte(flags)||(flags&0xe0u)!=0)return false;
+    h.allow_180=(flags&0x01u)!=0;
+    h.irs=(flags&0x02u)!=0;
+    h.ihs=(flags&0x04u)!=0;
+    r.ghost=(flags&0x08u)!=0;
+    r.tournament=(flags&0x10u)!=0;
+    if(!readBoundedVar(8,r.next_count)||r.next_count<1)return false;
+    if(!readBoundedVar(100,r.garbage_cap))return false;
+    if(!readBoundedVar(60000,r.garbage_delay_ms))return false;
+    if(!readBoundedVar(100,r.garbage_messiness_pct))return false;
+    if(!readBoundedVar(60000,r.custom_gravity_ms))return false;
+    if(!readBoundedVar(1000000,r.custom_line_goal))return false;
+    if(!readBoundedVar(43200,r.custom_time_limit_s))return false;
+    if(!readBoundedVar(12,r.custom_start_garbage))return false;
+    return validRules(r);
+}
+
+bool ReplayDecoder::parseHeader(){
+    std::array<std::uint8_t,kReplayMagic.size()> magic{};
+    if(!readRaw(magic.data(),magic.size())||magic!=kReplayMagic){fail("unsupported replay format");return false;}
+    std::uint64_t seed{};
+    if(!readVar(seed)){fail("truncated replay seed");return false;}
+    replay_.seed=seed;
+    std::uint8_t mode{};
+    if(!readByte(mode)||mode>static_cast<std::uint8_t>(Mode::Custom)){fail("invalid replay mode");return false;}
+    replay_.mode=static_cast<Mode>(mode);
+    if(!readRules()){fail("invalid replay rules");return false;}
+    std::uint64_t duration{};
+    if(!readVar(duration)||duration>static_cast<std::uint64_t>(kMaxReplayDurationUs)){fail("invalid replay duration");return false;}
+    replay_.duration_us=static_cast<TimeUs>(duration);
+    std::uint64_t count{};
+    if(!readVar(count)||count>kMaxReplayEvents){fail("invalid replay event count");return false;}
+    expected_events_=static_cast<std::size_t>(count);
+    // Avoid one giant reserve allocation for hostile million-event files. The
+    // vector grows normally while Web decoding yields between bounded chunks.
+    replay_.events.reserve(std::min<std::size_t>(expected_events_,65'536u));
+    header_done_=true;
+    return true;
+}
+
+bool ReplayDecoder::finishDecode(){
+    Sha256Digest hash{};
+    if(!readRaw(hash.data(),hash.size())){fail("truncated replay hash");return false;}
+    if(pos_!=bytes_.size()){fail("unexpected trailing replay data");return false;}
+    replay_.final_hash=hash;
+    finished_=true;
+    return true;
+}
+
+bool ReplayDecoder::step(std::size_t max_events){
+    if(finished_)return false;
+    if(!header_done_&& !parseHeader())return false;
+    if(max_events==0)max_events=1;
+    std::size_t processed=0;
+    while(decoded_events_<expected_events_&&processed<max_events){
+        std::uint64_t delta{};std::uint8_t packed{};
+        if(!readVar(delta)||!readByte(packed)){fail("truncated replay event data");return false;}
+        if((packed&0x70u)!=0){fail("invalid replay event flags");return false;}
+        const auto action_raw=static_cast<std::uint8_t>(packed&0x0fu);
+        if(action_raw>static_cast<std::uint8_t>(Action::Hold)){fail("replay contains a non-gameplay action");return false;}
+        if(delta>std::numeric_limits<std::uint64_t>::max()-timestamp_){fail("replay timestamp overflow");return false;}
+        timestamp_+=delta;
+        if(timestamp_>static_cast<std::uint64_t>(replay_.duration_us)||timestamp_>static_cast<std::uint64_t>(std::numeric_limits<TimeUs>::max())){
+            fail("replay event is outside replay duration");return false;
+        }
+        replay_.events.push_back({static_cast<TimeUs>(timestamp_),static_cast<Action>(action_raw),(packed&0x80u)!=0});
+        ++decoded_events_;++processed;
+    }
+    if(decoded_events_==expected_events_)return finishDecode();
+    return processed>0;
+}
+
+Replay ReplayDecoder::takeReplay(){
+    if(!ok())return {};
+    return std::move(replay_);
+}
+
+bool deserializeReplay(std::string_view bytes,Replay& out,std::string* err){
+    ReplayDecoder decoder(bytes);
+    while(!decoder.finished())decoder.step(65'536u);
+    if(!decoder.ok()){setError(err,decoder.error());out=Replay{};return false;}
+    out=decoder.takeReplay();
     return true;
 }
 
@@ -331,7 +365,7 @@ bool loadReplay(const std::string&path,Replay&out,std::string*err){
     return deserializeReplay(bytes,out,err);
 }
 
-bool verifyReplay(const Replay&r,std::string*actual){
+bool verifyReplay(const Replay&r,Sha256Digest*actual){
     if(!validateReplay(r,nullptr))return false;
     Game g(r.seed,r.mode,r.rules);
     for(const auto&e:r.events){
@@ -341,51 +375,58 @@ bool verifyReplay(const Replay&r,std::string*actual){
     g.advanceTo(r.duration_us);
     const auto h=stateHash(g);
     if(actual)*actual=h;
-    return h==r.final_hash;
+    return h==*r.final_hash;
 }
 
 ReplayIndexBuilder::ReplayIndexBuilder(const Replay& replay)
     : replay_(&replay), game_(replay.seed,replay.mode,replay.rules) {
-    const auto checkpoint_count=static_cast<std::size_t>(replay.duration_us/std::max<TimeUs>(1,kReplayCheckpointIntervalUs))+2u;
-    index_.checkpoints.reserve(checkpoint_count);
+    index_.checkpoint_interval_us=checkpointIntervalFor(replay.duration_us);
+    const auto interval=std::max<TimeUs>(1,index_.checkpoint_interval_us);
+    const auto count=static_cast<std::size_t>(replay.duration_us/interval)+2u;
+    index_.checkpoints.reserve(std::min<std::size_t>(count,kMaxReplayCheckpoints));
     index_.pieces.reserve(replay.events.size()/3u+1u);
     index_.line_clears.reserve(replay.events.size()/8u+1u);
     index_.tspins.reserve(replay.events.size()/32u+1u);
     index_.perfect_clears.reserve(replay.events.size()/128u+1u);
-    index_.checkpoints.push_back({0,0,game_});
+    game_.setSemanticEventCapture(true);
+    next_checkpoint_us_=index_.checkpoint_interval_us;
+    addCheckpoint(0);
 }
 
-void ReplayIndexBuilder::recordStats(const Stats& before,const Stats& after,TimeUs at,std::size_t next_event){
-    addRepeatedMarkers(index_.pieces,before.pieces,after.pieces,at,next_event);
-    if(after.lines>before.lines)index_.line_clears.push_back({at,next_event,after.lines});
-    addRepeatedMarkers(index_.tspins,before.tspins,after.tspins,at,next_event);
-    addRepeatedMarkers(index_.perfect_clears,before.perfect_clears,after.perfect_clears,at,next_event);
+void ReplayIndexBuilder::recordGameEvents(std::size_t next_event){
+    for(const auto& e:game_.semanticEvents()){
+        ReplayMarker marker{e.time_us,next_event,e.value};
+        switch(e.kind){
+            case GameEventKind::PieceLocked:index_.pieces.push_back(marker);break;
+            case GameEventKind::LinesCleared:index_.line_clears.push_back(marker);break;
+            case GameEventKind::TSpin:index_.tspins.push_back(marker);break;
+            case GameEventKind::PerfectClear:index_.perfect_clears.push_back(marker);break;
+        }
+    }
+    game_.clearSemanticEvents();
 }
 
 void ReplayIndexBuilder::advanceAndRecord(TimeUs target){
     if(target<=playhead_)return;
-    const auto before=game_.stats();
     game_.advanceTo(target);
     playhead_=target;
-    recordStats(before,game_.stats(),playhead_,event_index_);
+    recordGameEvents(event_index_);
 }
 
 void ReplayIndexBuilder::addCheckpoint(TimeUs at){
+    Game snapshot=game_;
+    snapshot.setSemanticEventCapture(false);
     if(!index_.checkpoints.empty()&&index_.checkpoints.back().time_us==at){
-        index_.checkpoints.back()={at,event_index_,game_};
+        index_.checkpoints.back()={at,event_index_,std::move(snapshot)};
         return;
     }
-    index_.checkpoints.push_back({at,event_index_,game_});
+    if(index_.checkpoints.size()<kMaxReplayCheckpoints)index_.checkpoints.push_back({at,event_index_,std::move(snapshot)});
 }
 
 bool ReplayIndexBuilder::step(){
     if(finished_||!replay_)return false;
     const auto& r=*replay_;
 
-    // A single builder step never asks Game::advanceTo() to consume an
-    // unbounded span. This keeps pathological high-gravity/custom replays from
-    // monopolizing a Web frame while still letting the outer loop spend its
-    // normal ~1.5 ms budget efficiently.
     const TimeUs event_time=(event_index_<r.events.size())?r.events[event_index_].time_us:r.duration_us;
     const TimeUs checkpoint_time=(next_checkpoint_us_<r.duration_us)?next_checkpoint_us_:r.duration_us;
     const TimeUs slice_time=std::min(r.duration_us,playhead_+kReplayIndexSimulationSliceUs);
@@ -395,7 +436,7 @@ bool ReplayIndexBuilder::step(){
         advanceAndRecord(target);
         if(target==next_checkpoint_us_&&next_checkpoint_us_<r.duration_us){
             addCheckpoint(target);
-            next_checkpoint_us_+=kReplayCheckpointIntervalUs;
+            next_checkpoint_us_+=index_.checkpoint_interval_us;
         }
         if(target<event_time)return true;
     }
@@ -403,23 +444,18 @@ bool ReplayIndexBuilder::step(){
     if(event_index_<r.events.size()&&r.events[event_index_].time_us==playhead_){
         const TimeUs at=playhead_;
         do{
-            const auto before=game_.stats();
             const auto& e=r.events[event_index_];
             if(e.down)game_.press(e.action);else game_.release(e.action);
             ++event_index_;
-            recordStats(before,game_.stats(),at,event_index_);
+            recordGameEvents(event_index_);
         }while(event_index_<r.events.size()&&r.events[event_index_].time_us==at);
-        if(next_checkpoint_us_==at&&next_checkpoint_us_<r.duration_us){
-            addCheckpoint(at);
-            next_checkpoint_us_+=kReplayCheckpointIntervalUs;
-        }
         return true;
     }
 
     if(playhead_<r.duration_us)return true;
 
     if(index_.checkpoints.empty()||index_.checkpoints.back().time_us!=r.duration_us)addCheckpoint(r.duration_us);
-    if(!r.final_hash.empty())index_.verification=stateHash(game_)==r.final_hash;
+    if(r.final_hash.has_value())index_.verification=stateHash(game_)==*r.final_hash;
     finished_=true;
     return true;
 }

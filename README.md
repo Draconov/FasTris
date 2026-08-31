@@ -30,6 +30,9 @@ Gameplay simulation is independent from rendering. The same seed, rules, and tim
 
 - Deterministic PCG32 RNG with a modern 7-bag randomizer
 - Editable 64-bit seeds in Settings and daily seeded challenges
+- Built-in presentation palettes: Default, Hacker, Amber, Black & White, and Mint Blue
+- Presentation shaders with per-shader live controls: CRT, Terminal, LCD, Dot Matrix, Bloom, Phosphor, Scanlines, Vignette, Analog, Chromatic, Ghosting, Pixel Grid, and Arcade
+- Procedural block textures with live texture-specific controls: Default, Flat, Beveled, Soft Bevel, Glass, Neon, Metallic, Pixel, Dots, Stripes, Grid, Wireframe, Outline, Hollow, Raised, Recessed, Arcade, and Retro LCD
 - SRS-style rotation with clockwise, counter-clockwise, and optional 180-degree rotation
 - Hold, ghost piece, hard drop, soft drop, and sonic drop
 - Configurable DAS, ARR, SDF, DCD, IRS, IHS, lock delay, and lock resets
@@ -60,6 +63,11 @@ Gameplay simulation is independent from rendering. The same seed, rules, and tim
 | Fullscreen | F11 | Not assigned |
 
 Gameplay bindings can be changed from **Settings -> Controls**, which also includes a dedicated Reset Controls action.
+Visual palettes are available under **Settings -> Miscellaneous -> Palettes** and apply immediately across menus and gameplay.
+Presentation shaders are available under **Settings -> Miscellaneous -> Shaders**. Each shader exposes only its relevant controls; CRT includes adjustable screen curvature.
+Procedural block textures are available under **Settings -> Miscellaneous -> Textures**. Texture controls are dynamic, apply immediately, and include options such as cell gap, bevel depth, highlights, borders, reflection, pattern scale, dots, stripes, grid geometry, and transparency depending on the selected texture. Textures are generated from lightweight SDL primitives with no image assets or runtime decoding.
+
+Palettes, textures, and shaders are presentation-only and never affect gameplay, replay data, deterministic hashes, seeds, or verification.
 
 ## Seeds and deterministic runs
 

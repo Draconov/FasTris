@@ -63,7 +63,7 @@ void Sha256::update(const void* data, std::size_t size) {
     }
 }
 
-std::array<std::uint8_t,32> Sha256::finalBytes() {
+Sha256Digest Sha256::finalBytes() {
     if(finalized_)return digest_;
     const std::uint64_t bits=total_bytes_*8u;
     buffer_[buffer_size_++]=0x80;
@@ -94,7 +94,7 @@ std::string hexLower(const std::uint8_t* data,std::size_t size){
 std::string Sha256::finalHex(){const auto d=finalBytes();return hexLower(d.data(),d.size());}
 std::string sha256(std::string_view data){Sha256 h;h.update(data);return h.finalHex();}
 
-bool parseHex32(std::string_view hex,std::array<std::uint8_t,32>& out){
+bool parseHex32(std::string_view hex,Sha256Digest& out){
     if(hex.size()!=64)return false;
     for(std::size_t i=0;i<32;++i){
         const int hi=hexNibble(hex[2*i]),lo=hexNibble(hex[2*i+1]);

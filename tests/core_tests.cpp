@@ -381,11 +381,124 @@ static void test_replay_parser_requires_current_layout() {
         "FASTTRIS_REPLAY 1\nseed 8080\nmode 0\nobsolete 1\nduration 0\nhash deadbeef\n");
 }
 
+
+static void test_replay_incremental_decoder_and_action_filter() {
+    Replay r;
+    r.seed=77;
+    r.mode=Mode::Zen;
+    TimeUs t=0;
+    for(int i=0;i<5000;++i){
+        t+=1000;
+        r.events.push_back({t,(i%2)?Action::Left:Action::Right,true});
+        r.events.push_back({t+1,(i%2)?Action::Left:Action::Right,false});
+    }
+    r.duration_us=t+1000;
+    Game g(r.seed,r.mode,r.rules);
+    for(const auto& e:r.events){g.advanceTo(e.time_us);if(e.down)g.press(e.action);else g.release(e.action);}
+    g.advanceTo(r.duration_us);
+    r.final_hash=stateHash(g);
+    const auto encoded=serializeReplay(r);
+    ReplayDecoder decoder(encoded);
+    std::size_t calls=0;
+    while(!decoder.finished()){
+        const auto before=decoder.decodedEvents();
+        decoder.step(17);
+        assert(decoder.decodedEvents()-before<=17);
+        assert(++calls<10000);
+    }
+    assert(decoder.ok());
+    auto decoded=decoder.takeReplay();
+    assert(decoded.events==r.events);
+    assert(decoded.final_hash==r.final_hash);
+
+    r.events={{1000,Action::Pause,true}};
+    r.duration_us=2000;
+    r.final_hash=stateHash(Game(r.seed,r.mode,r.rules));
+    std::string err;
+    assert(!validateReplay(r,&err));
+    r.events={{1000,Action::Restart,true}};
+    assert(!validateReplay(r,&err));
+
+    // The binary decoder independently rejects application-only actions too.
+    Replay one;
+    one.seed=88;one.mode=Mode::Zen;one.duration_us=2000;
+    one.events={{1000,Action::Hold,true}};
+    Game one_game(one.seed,one.mode,one.rules);
+    one_game.advanceTo(1000);one_game.press(Action::Hold);one_game.advanceTo(one.duration_us);
+    one.final_hash=stateHash(one_game);
+    auto bad_action=serializeReplay(one);
+    assert(bad_action.size()>33);
+    bad_action[bad_action.size()-33]=static_cast<char>(static_cast<std::uint8_t>(Action::Pause)|0x80u);
+    Replay rejected;
+    assert(!deserializeReplay(bad_action,rejected,&err));
+}
+
+static void test_exact_semantic_events_and_replay_markers() {
+    Rules r;
+    Game g(123,Mode::Zen,r);
+    g.setSemanticEventCapture(true);
+    g.advanceTo(123456);
+    g.press(Action::HardDrop);
+    const auto events=g.semanticEvents();
+    assert(!events.empty());
+    assert(events.front().kind==GameEventKind::PieceLocked);
+    assert(events.front().time_us==123456);
+    assert(events.front().value==1);
+    g.clearSemanticEvents();
+
+    Replay replay;
+    replay.seed=123;
+    replay.mode=Mode::Zen;
+    replay.events={{1000000,Action::HardDrop,true},{2000000,Action::HardDrop,true},{3000000,Action::HardDrop,true}};
+    replay.duration_us=4000000;
+    Game source(replay.seed,replay.mode,replay.rules);
+    for(const auto& e:replay.events){source.advanceTo(e.time_us);source.press(e.action);}
+    source.advanceTo(replay.duration_us);
+    replay.final_hash=stateHash(source);
+    ReplayIndexBuilder builder(replay);
+    int guard=0;
+    while(!builder.finished()&&guard++<100000)assert(builder.step());
+    assert(builder.finished());
+    const auto& pieces=builder.index().pieces;
+    assert(pieces.size()>=3);
+    assert(pieces[0].time_us==1000000);
+    assert(pieces[1].time_us==2000000);
+    assert(pieces[2].time_us==3000000);
+}
+
+static void test_adaptive_checkpoint_bound() {
+    Replay max_replay;
+    max_replay.seed=5;
+    max_replay.mode=Mode::Zen;
+    max_replay.duration_us=kMaxReplayDurationUs;
+    Game max_game(max_replay.seed,max_replay.mode,max_replay.rules);
+    max_game.advanceTo(max_replay.duration_us);
+    max_replay.final_hash=stateHash(max_game);
+    ReplayIndexBuilder max_builder(max_replay);
+    const auto interval=max_builder.index().checkpoint_interval_us;
+    assert(interval>=kReplayCheckpointBaseIntervalUs);
+    const auto predicted=static_cast<std::size_t>((max_replay.duration_us-1)/interval)+2u;
+    assert(predicted<=kMaxReplayCheckpoints);
+
+    // Finish a multi-hour no-gravity replay to prove the runtime index itself
+    // respects the cap and still preserves the final seek checkpoint.
+    Replay long_replay;
+    long_replay.seed=6;long_replay.mode=Mode::Zen;long_replay.duration_us=3LL*60LL*60LL*1000000LL;
+    Game g(long_replay.seed,long_replay.mode,long_replay.rules);g.advanceTo(long_replay.duration_us);
+    long_replay.final_hash=stateHash(g);
+    ReplayIndexBuilder builder(long_replay);
+    int guard=0;
+    while(!builder.finished()&&guard++<100000)assert(builder.step());
+    assert(builder.finished());
+    assert(builder.index().checkpoints.size()<=kMaxReplayCheckpoints);
+    assert(builder.index().checkpoints.back().time_us==long_replay.duration_us);
+}
+
 static void test_battle_smoke() {
     Rules r; r.garbage_delay_ms=0; Battle b(1,2,r,r); b.advanceTo(1000); b.press(0,Action::HardDrop); b.advanceTo(2000); assert(!b.game(0).gameOver()); assert(!b.game(1).gameOver());
 }
 
 int main(){
-    test_seed_text_scanning();test_rng_and_bag();test_shapes();test_board();test_game_determinism();test_seed_difference();test_replay();test_replay_validation_and_bounds();test_replay_index_and_checkpoints();test_sha();test_irs_ihs();test_replay_fuzz();test_default_horizontal_handling();test_zero_arr_remains_expert_instant_shift();test_zero_arr_preserves_charge_across_spawn();test_modern_scoring();test_finesse_tracking();test_custom_mode_rules();test_mode_basics();test_replay_parser_requires_current_layout();test_battle_smoke();
+    test_seed_text_scanning();test_rng_and_bag();test_shapes();test_board();test_game_determinism();test_seed_difference();test_replay();test_replay_validation_and_bounds();test_replay_index_and_checkpoints();test_sha();test_irs_ihs();test_replay_fuzz();test_default_horizontal_handling();test_zero_arr_remains_expert_instant_shift();test_zero_arr_preserves_charge_across_spawn();test_modern_scoring();test_finesse_tracking();test_custom_mode_rules();test_mode_basics();test_replay_parser_requires_current_layout();test_replay_incremental_decoder_and_action_filter();test_exact_semantic_events_and_replay_markers();test_adaptive_checkpoint_bound();test_battle_smoke();
     std::cout<<"FasTris core tests: PASS\n";
 }

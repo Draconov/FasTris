@@ -21,6 +21,13 @@ enum class Action : std::uint8_t {
 enum class Mode : std::uint8_t { Sprint40, Ultra120, Marathon, Zen, Cheese40, Finesse, SeedRace, Custom };
 enum class Spin : std::uint8_t { None, Mini, Full };
 
+enum class GameEventKind : std::uint8_t { PieceLocked, LinesCleared, TSpin, PerfectClear };
+struct GameEvent {
+    TimeUs time_us{};
+    GameEventKind kind{GameEventKind::PieceLocked};
+    int value{};
+};
+
 enum class ClearKind : std::uint8_t {
     None, Single, Double, Triple, Quad,
     MiniNoLine, MiniSingle, MiniDouble, TSpinNoLine, TSpinSingle, TSpinDouble, TSpinTriple
@@ -56,7 +63,7 @@ struct Rules {
     int garbage_delay_ms{500};
     int garbage_messiness_pct{25};
 
-    // Sandbox mode only. Zero means disabled/endless.
+    // Custom / Sandbox mode only. Zero means disabled/endless.
     int custom_gravity_ms{1000};
     int custom_line_goal{0};
     int custom_time_limit_s{0};
@@ -110,7 +117,7 @@ inline constexpr std::string_view modeName(Mode m) {
         case Mode::Sprint40: return "Sprint 40L"; case Mode::Ultra120: return "Ultra 2:00";
         case Mode::Marathon: return "Marathon"; case Mode::Zen: return "Zen";
         case Mode::Cheese40: return "Cheese 40"; case Mode::Finesse: return "Finesse";
-        case Mode::SeedRace: return "Seed Race"; case Mode::Custom: return "Sandbox";
+        case Mode::SeedRace: return "Seed Race"; case Mode::Custom: return "Custom";
     }
     return "Unknown";
 }

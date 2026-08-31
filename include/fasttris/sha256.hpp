@@ -7,12 +7,14 @@
 
 namespace fasttris {
 
+using Sha256Digest = std::array<std::uint8_t,32>;
+
 class Sha256 {
 public:
     Sha256();
     void update(const void* data, std::size_t size);
     void update(std::string_view data) { update(data.data(), data.size()); }
-    std::array<std::uint8_t,32> finalBytes();
+    Sha256Digest finalBytes();
     std::string finalHex();
 
 private:
@@ -22,11 +24,12 @@ private:
     std::size_t buffer_size_{};
     std::uint64_t total_bytes_{};
     bool finalized_{};
-    std::array<std::uint8_t,32> digest_{};
+    Sha256Digest digest_{};
 };
 
 std::string sha256(std::string_view data);
 std::string hexLower(const std::uint8_t* data, std::size_t size);
-bool parseHex32(std::string_view hex, std::array<std::uint8_t,32>& out);
+inline std::string hexLower(const Sha256Digest& digest) { return hexLower(digest.data(), digest.size()); }
+bool parseHex32(std::string_view hex, Sha256Digest& out);
 
 } // namespace fasttris

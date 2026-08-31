@@ -19,7 +19,7 @@ Piece generation uses PCG32 through `Bag7`.
 
 Garbage uses a separately seeded PCG32 stream. Cosmetic systems should use another RNG and must never consume gameplay RNG values.
 
-Piece and garbage generation are deterministic from the stored seed and rules. Replay files use one current binary layout with delta-coded input timestamps; older layouts are intentionally unsupported. The parser validates bounded metadata before simulation. One incremental load-time replay pass verifies the final state while also building five-second seek checkpoints plus piece, line-clear, T-spin, and Perfect Clear indexes. These indexes are in-memory only and make replay seeking/navigation cheap without bloating `.ftr` files.
+Piece and garbage generation are deterministic from the stored seed and rules. Replay files use one current binary layout with delta-coded input timestamps; older layouts are intentionally unsupported. Parsing is strict and bounded, and Web decoding is incremental so hostile large files cannot monopolize a frame. One incremental load-time simulation verifies the final state while also building adaptive, hard-capped seek checkpoints plus exact engine-emitted piece, line-clear, T-spin, and Perfect Clear indexes. These indexes are in-memory only and make replay seeking/navigation cheap without bloating `.ftr` files.
 
 ## Timing
 

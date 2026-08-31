@@ -13,6 +13,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cstdint>
+#include <cstdlib>
 #include <filesystem>
 #include <iostream>
 #include <iterator>
@@ -34,7 +35,7 @@ using namespace fasttris;
 using namespace fasttris::app;
 
 namespace {
-enum class Screen { Menu, Game, Settings, SeedSettings, Controls, Miscellaneous, Help, Replay, ReplayMenu, SandboxSetup };
+enum class Screen { Menu, Game, Settings, SeedSettings, Controls, Miscellaneous, Shaders, Textures, Palettes, Help, Replay, ReplayMenu, SandboxSetup };
 
 std::uint64_t randomSeed() {
     std::random_device rd;
@@ -109,10 +110,29 @@ std::string preferenceRoot() {
 }
 
 enum class ReplayDialogAction { Load, Save };
+#if defined(__EMSCRIPTEN__)
+struct WebReplayBuffer {
+    unsigned char* data{};
+    std::size_t size{};
+    WebReplayBuffer()=default;
+    WebReplayBuffer(unsigned char* p,std::size_t n):data(p),size(n){}
+    WebReplayBuffer(const WebReplayBuffer&)=delete;
+    WebReplayBuffer& operator=(const WebReplayBuffer&)=delete;
+    WebReplayBuffer(WebReplayBuffer&& other) noexcept : data(other.data),size(other.size){other.data=nullptr;other.size=0;}
+    WebReplayBuffer& operator=(WebReplayBuffer&& other) noexcept {
+        if(this!=&other){if(data)std::free(data);data=other.data;size=other.size;other.data=nullptr;other.size=0;}
+        return *this;
+    }
+    ~WebReplayBuffer(){if(data)std::free(data);}
+    std::span<const std::uint8_t> bytes() const { return {reinterpret_cast<const std::uint8_t*>(data),size}; }
+};
+#endif
 struct ReplayDialogResult {
     ReplayDialogAction action{ReplayDialogAction::Load};
     std::string path;
-    std::optional<std::string> contents;
+#if defined(__EMSCRIPTEN__)
+    std::optional<WebReplayBuffer> web_buffer;
+#endif
     std::string error;
     bool canceled{};
 };
@@ -195,12 +215,14 @@ EM_JS(void, webChooseReplayFile, (), {
             const bytes = reader.result instanceof ArrayBuffer ? new Uint8Array(reader.result) : new Uint8Array();
             cleanup();
             const ptr = Module._malloc(Math.max(1, bytes.length));
-            try {
-                if (bytes.length) HEAPU8.set(bytes, ptr);
-                Module.ccall('fastris_web_replay_loaded_bytes', null, ['number','number'], [ptr, bytes.length]);
-            } finally {
-                Module._free(ptr);
+            if (!ptr) {
+                Module.ccall('fastris_web_replay_error', null, ['string'], ['not enough memory to load replay']);
+                return;
             }
+            if (bytes.length) HEAPU8.set(bytes, ptr);
+            // Ownership transfers to C++; it frees the WASM allocation after
+            // incremental decoding completes or the load is canceled/failed.
+            Module.ccall('fastris_web_replay_loaded_bytes', null, ['number','number'], [ptr, bytes.length]);
         };
         reader.onerror = () => {
             cleanup();
@@ -313,7 +335,6 @@ struct ReplayViewer {
     // analysis indexes. Playback reuses those results instead of re-simulating
     // work independently.
     std::unique_ptr<ReplayIndexBuilder> index_builder;
-    std::vector<TimeUs> quick_piece_times;
     std::optional<bool> end_verification_result;
 
     bool load(const std::string& path, std::string& err) {
@@ -330,11 +351,13 @@ struct ReplayViewer {
     }
 
     void beginIndexing() {
+        // A newly loaded replay always starts as a fresh viewer session.
+        // Do not inherit pause/speed state from a replay that was watched
+        // previously (for example one that auto-paused at its end).
+        paused = false;
+        speed = 1.0;
         end_verification_result.reset();
         index_builder = std::make_unique<ReplayIndexBuilder>(rep);
-        quick_piece_times.clear();
-        quick_piece_times.reserve(rep.events.size()/4+1);
-        for(const auto& e:rep.events)if(e.down&&e.action==Action::HardDrop)quick_piece_times.push_back(e.time_us);
     }
 
     const ReplayIndex* replayIndex() const {
@@ -346,7 +369,12 @@ struct ReplayViewer {
         index = 0;
         playhead = 0;
         seek(target);
-        last_wall_ns = SDL_GetTicksNS();
+        // Let the next tick establish the wall-clock baseline. reset() can be
+        // called after the app frame timestamp has already been sampled (for
+        // example after a Web file-picker callback). Sampling a newer clock
+        // value here and then subtracting it from that older frame timestamp
+        // would underflow Uint64 and look like an enormous playback delta.
+        last_wall_ns = 0;
     }
 
     const ReplayCheckpoint* bestCheckpoint(TimeUs target) const {
@@ -369,7 +397,8 @@ struct ReplayViewer {
         if(!game){game=std::make_unique<Game>(rep.seed,rep.mode,rep.rules);index=0;playhead=0;}
 
         const bool backward=target<playhead;
-        const bool long_forward=target>playhead+kReplayCheckpointIntervalUs*2;
+        const TimeUs checkpoint_interval=(replayIndex()?replayIndex()->checkpoint_interval_us:kReplayCheckpointBaseIntervalUs);
+        const bool long_forward=target>playhead+checkpoint_interval*2;
         if(backward||long_forward){
             if(const auto* cp=bestCheckpoint(target);cp&&(backward||cp->time_us>playhead)){
                 restoreCheckpoint(*cp);
@@ -391,16 +420,21 @@ struct ReplayViewer {
 
     void stepLoadVerification() {
         if(!index_builder||index_builder->finished())return;
-        constexpr Uint64 kWallBudgetNs=1500000; // ~1.5 ms per frame.
-        const Uint64 deadline=SDL_GetTicksNS()+kWallBudgetNs;
-        while(SDL_GetTicksNS()<deadline&&!index_builder->finished()){
+        constexpr Uint64 kWallBudgetNs=1'000'000ULL; // <= ~1 ms per frame.
+        constexpr int kMaxStepsPerFrame=64;
+        const Uint64 start=SDL_GetTicksNS();
+        for(int steps=0;steps<kMaxStepsPerFrame&&!index_builder->finished();++steps){
             if(!index_builder->step())break;
+            // Keep a hard step cap as well as the wall-clock budget. The cap
+            // guarantees yielding even on platforms where timer resolution is
+            // coarse or unusual inside a tight WebAssembly loop.
+            if(SDL_GetTicksNS()-start>=kWallBudgetNs)break;
         }
     }
 
     void verifyEndStateIfNeeded() {
-        if(playhead<rep.duration_us||end_verification_result.has_value()||rep.final_hash.empty())return;
-        end_verification_result=stateHash(*game)==rep.final_hash;
+        if(playhead<rep.duration_us||end_verification_result.has_value()||!rep.final_hash.has_value())return;
+        end_verification_result=stateHash(*game)==*rep.final_hash;
     }
 
     std::optional<bool> visibleVerificationResult() const {
@@ -413,9 +447,24 @@ struct ReplayViewer {
 
     void tick(Uint64 now) {
         stepLoadVerification();
-        if(last_wall_ns==0)last_wall_ns=now;
+
+        // A replay may be loaded from an asynchronous browser/native dialog
+        // after this frame's `now` value was sampled. Never subtract an older
+        // timestamp from a newer baseline: Uint64 underflow would turn one
+        // frame into a gigantic seek and can lock up the Web main thread.
+        if(last_wall_ns==0 || now<=last_wall_ns){
+            last_wall_ns=now;
+            verifyEndStateIfNeeded();
+            return;
+        }
+
         if(!paused){
-            const auto delta=now-last_wall_ns;
+            // Do not catch up an arbitrarily long browser/tab stall in one
+            // frame. Replay playback is presentation time, so after a stall we
+            // resume smoothly instead of synchronously simulating seconds (or
+            // minutes) of replay on the UI thread.
+            constexpr Uint64 kMaxPlaybackWallDeltaNs=100'000'000ULL; // 100 ms
+            const Uint64 delta=std::min(now-last_wall_ns,kMaxPlaybackWallDeltaNs);
             const auto add=static_cast<TimeUs>((delta/1000.0)*speed);
             seek(std::min(rep.duration_us,playhead+add));
             if(playhead>=rep.duration_us)paused=true;
@@ -435,13 +484,10 @@ struct ReplayViewer {
             const auto it=std::upper_bound(ri->pieces.begin(),ri->pieces.end(),playhead,
                 [](TimeUs t,const ReplayMarker& marker){return t<marker.time_us;});
             if(it!=ri->pieces.end()){seek(it->time_us);return;}
-            if(index_builder&&index_builder->finished()){seek(rep.duration_us);return;}
+            if(index_builder&&index_builder->finished())seek(rep.duration_us);
         }
-        // Before the simulation-derived piece index finishes, use the tiny
-        // hard-drop navigation index built once at load. No per-key linear scan.
-        const auto quick=std::upper_bound(quick_piece_times.begin(),quick_piece_times.end(),playhead);
-        if(quick!=quick_piece_times.end()){seek(*quick);return;}
-        seek(rep.duration_us);
+        // While incremental indexing is still catching up, do nothing rather
+        // than maintaining a second redundant HardDrop-only piece index.
     }
 };
 
@@ -478,7 +524,7 @@ struct RunSession {
     }
 
     void advance(Uint64 ns) {
-        if (game && !paused) game->advanceTo(simAt(ns));
+        if (game && !paused) { game->advanceTo(simAt(ns)); replay.final_hash.reset(); }
     }
 
     void togglePause(Uint64 ns) {
@@ -495,6 +541,7 @@ struct RunSession {
     }
 
     void record(TimeUs t, Action action, bool down) {
+        replay.final_hash.reset();
         replay.events.push_back({t, action, down});
         recent.push_back({t, action, down});
         if (recent.size() > 12) recent.erase(recent.begin());
@@ -510,15 +557,14 @@ struct RunSession {
         record(t, action, down);
     }
 
-    Replay snapshot() const {
-        Replay out=replay;
-        if(game){out.duration_us=game->now();out.final_hash=stateHash(*game);}
-        return out;
+    const Replay& prepareReplay() {
+        if(game){replay.duration_us=game->now();replay.final_hash=stateHash(*game);}
+        return replay;
     }
 
     bool save(const std::string& path) {
         if (!game) return false;
-        replay=snapshot();
+        prepareReplay();
         std::error_code ec;
         const auto parent = std::filesystem::path(path).parent_path();
         if (!parent.empty()) std::filesystem::create_directories(parent, ec);
@@ -569,6 +615,10 @@ struct AppState {
     int settings_sel{};
     int seed_settings_sel{};
     int controls_sel{};
+    int misc_sel{kMiscShadersIndex};
+    int shader_sel{};
+    int texture_sel{};
+    int palette_sel{};
     int custom_sel{};
     int replay_menu_sel{};
     bool rebinding{};
@@ -594,7 +644,11 @@ struct AppState {
     bool replay_dialog_open{};
     bool replay_dialog_paused_run{};
     bool pending_save_from_game{};
-    std::optional<Replay> pending_replay_save;
+    const Replay* pending_replay_save{};
+#if defined(__EMSCRIPTEN__)
+    std::optional<WebReplayBuffer> web_replay_buffer;
+    std::unique_ptr<ReplayDecoder> web_replay_decoder;
+#endif
     Uint64 frame_start{};
 
     void startRun(Mode mode, Uint64 now) {
@@ -639,7 +693,7 @@ struct AppState {
         (void)now;
         return;
 #else
-        pending_replay_save=replay;
+        pending_replay_save=&replay;
         pending_save_from_game=from_game;
         replay_dialog_open=true;
         replay_dialog_paused_run=false;
@@ -666,12 +720,17 @@ struct AppState {
         if(result->action==ReplayDialogAction::Load){
             if(result->canceled){replay_status="LOAD CANCELED";return;}
             if(!result->error.empty()){replay_status="LOAD DIALOG FAILED: "+result->error;return;}
+#if defined(__EMSCRIPTEN__)
+            if(result->web_buffer){
+                web_replay_buffer=std::move(*result->web_buffer);
+                web_replay_decoder=std::make_unique<ReplayDecoder>(web_replay_buffer->bytes());
+                replay_status="LOADING REPLAY";
+                return;
+            }
+#endif
             Replay loaded;
             std::string err;
-            const bool ok=result->contents
-                ? deserializeReplay(*result->contents,loaded,&err)
-                : loadReplayWithSDL(result->path,loaded,err);
-            if(!ok){replay_status="LOAD FAILED: "+err;return;}
+            if(!loadReplayWithSDL(result->path,loaded,err)){replay_status="LOAD FAILED: "+err;return;}
             viewer.load(std::move(loaded));
             replay_status.clear();
             screen=Screen::Replay;
@@ -690,10 +749,42 @@ struct AppState {
             if(pending_save_from_game)run.status=ok?"REPLAY SAVED TO FILE":"SAVE FAILED: "+err;
             else replay_status=ok?"REPLAY SAVED TO FILE":"SAVE FAILED: "+err;
         }
-        pending_replay_save.reset();
+        pending_replay_save=nullptr;
         pending_save_from_game=false;
         if(resume_run&&run.game&&run.paused)run.togglePause(SDL_GetTicksNS());
     }
+
+#if defined(__EMSCRIPTEN__)
+    void processWebReplayDecode() {
+        if(!web_replay_decoder)return;
+        constexpr Uint64 kDecodeBudgetNs=1'000'000ULL;
+        constexpr std::size_t kEventsPerStep=2048u;
+        constexpr int kMaxStepsPerFrame=8;
+        const Uint64 start=SDL_GetTicksNS();
+        for(int step=0;step<kMaxStepsPerFrame&&!web_replay_decoder->finished();++step){
+            web_replay_decoder->step(kEventsPerStep);
+            if(SDL_GetTicksNS()-start>=kDecodeBudgetNs)break;
+        }
+        if(!web_replay_decoder->finished()){
+            const auto total=web_replay_decoder->expectedEvents();
+            const auto done=web_replay_decoder->decodedEvents();
+            if(total>0)replay_status="LOADING REPLAY "+std::to_string((done*100u)/total)+"%";
+            return;
+        }
+        if(!web_replay_decoder->ok()){
+            replay_status="LOAD FAILED: "+web_replay_decoder->error();
+            web_replay_decoder.reset();
+            web_replay_buffer.reset();
+            return;
+        }
+        Replay loaded=web_replay_decoder->takeReplay();
+        web_replay_decoder.reset();
+        web_replay_buffer.reset();
+        viewer.load(std::move(loaded));
+        replay_status.clear();
+        screen=Screen::Replay;
+    }
+#endif
 
     void processSeedClipboard() {
         std::optional<SeedClipboardResult> result;
@@ -964,6 +1055,64 @@ struct AppState {
         saveConfig(config_path, cfg);
     }
 
+    int shaderSettingsItemCount() const {
+        return static_cast<int>(shaderControls(cfg.shader).size()) + 2; // shader + controls + back
+    }
+
+    int shaderSettingsBackIndex() const {
+        return shaderSettingsItemCount() - 1;
+    }
+
+    void cycleShader(int delta) {
+        int value=static_cast<int>(cfg.shader);
+        value=(value+(delta>0?1:-1)+kVisualShaderCount)%kVisualShaderCount;
+        cfg.shader=static_cast<VisualShader>(value);
+        shader_sel=0;
+        saveConfig(config_path,cfg);
+    }
+
+    void adjustShaderSetting(int delta) {
+        if(delta==0)return;
+        if(shader_sel==0){
+            cycleShader(delta);
+            return;
+        }
+        const auto controls=shaderControls(cfg.shader);
+        const int control_index=shader_sel-1;
+        if(control_index<0||control_index>=static_cast<int>(controls.size()))return;
+        adjustShaderControl(cfg,controls[static_cast<std::size_t>(control_index)],delta);
+        saveConfig(config_path,cfg);
+    }
+
+    int textureSettingsItemCount() const {
+        return static_cast<int>(textureControls(cfg.texture).size()) + 2; // texture + controls + back
+    }
+
+    int textureSettingsBackIndex() const {
+        return textureSettingsItemCount() - 1;
+    }
+
+    void cycleTexture(int delta) {
+        int value=static_cast<int>(cfg.texture);
+        value=(value+(delta>0?1:-1)+kVisualTextureCount)%kVisualTextureCount;
+        cfg.texture=static_cast<VisualTexture>(value);
+        texture_sel=0;
+        saveConfig(config_path,cfg);
+    }
+
+    void adjustTextureSetting(int delta) {
+        if(delta==0)return;
+        if(texture_sel==0){
+            cycleTexture(delta);
+            return;
+        }
+        const auto controls=textureControls(cfg.texture);
+        const int control_index=texture_sel-1;
+        if(control_index<0||control_index>=static_cast<int>(controls.size()))return;
+        adjustTextureControl(cfg,controls[static_cast<std::size_t>(control_index)],delta);
+        saveConfig(config_path,cfg);
+    }
+
     void activateSetting() {
         if (numericSetting(settings_sel)) {
             beginSettingNumberEdit();
@@ -989,6 +1138,8 @@ struct AppState {
                 screen = Screen::Controls;
                 break;
             case SettingMiscellaneous:
+                settings_status.clear();
+                misc_sel=kMiscShadersIndex;
                 settings_status.clear();
                 screen = Screen::Miscellaneous;
                 break;
@@ -1050,15 +1201,15 @@ struct AppState {
         if (!verify_path.empty()) {
             Replay replay;
             std::string err;
-            std::string actual;
+            Sha256Digest actual{};
             if (!loadReplay(verify_path, replay, &err)) {
                 std::cerr << "Replay load failed: " << err << "\n";
                 return false;
             }
             const bool ok = verifyReplay(replay, &actual);
             std::cout << (ok ? "VERIFIED\n" : "FAILED\n")
-                      << "expected: " << replay.final_hash << "\n"
-                      << "actual:   " << actual << "\n";
+                      << "expected: " << (replay.final_hash?hexLower(*replay.final_hash):std::string("<missing>")) << "\n"
+                      << "actual:   " << hexLower(actual) << "\n";
             should_exit = true;
             return ok;
         }
@@ -1359,8 +1510,86 @@ struct AppState {
         }
 
         if (screen == Screen::Miscellaneous) {
-            if (ev.type == SDL_EVENT_KEY_DOWN && !ev.key.repeat && ev.key.key == SDLK_ESCAPE) {
-                screen = Screen::Settings;
+            if (ev.type == SDL_EVENT_KEY_DOWN && !ev.key.repeat) {
+                const auto key=ev.key.key;
+                if(key==SDLK_ESCAPE){
+                    screen=Screen::Settings;
+                }else if(key==SDLK_UP){
+                    misc_sel=(misc_sel+kMiscItemCount-1)%kMiscItemCount;
+                }else if(key==SDLK_DOWN){
+                    misc_sel=(misc_sel+1)%kMiscItemCount;
+                }else if((key==SDLK_RETURN||key==SDLK_KP_ENTER)&&misc_sel==kMiscShadersIndex){
+                    shader_sel=0;
+                    screen=Screen::Shaders;
+                }else if((key==SDLK_RETURN||key==SDLK_KP_ENTER)&&misc_sel==kMiscTexturesIndex){
+                    texture_sel=0;
+                    screen=Screen::Textures;
+                }else if((key==SDLK_RETURN||key==SDLK_KP_ENTER)&&misc_sel==kMiscPalettesIndex){
+                    palette_sel=static_cast<int>(cfg.palette);
+                    screen=Screen::Palettes;
+                }
+            }
+            return SDL_APP_CONTINUE;
+        }
+
+        if(screen==Screen::Shaders){
+            if(ev.type==SDL_EVENT_KEY_DOWN&&!ev.key.repeat){
+                const auto key=ev.key.key;
+                const int item_count=shaderSettingsItemCount();
+                if(key==SDLK_ESCAPE){
+                    screen=Screen::Miscellaneous;
+                }else if(key==SDLK_UP){
+                    shader_sel=(shader_sel+item_count-1)%item_count;
+                }else if(key==SDLK_DOWN){
+                    shader_sel=(shader_sel+1)%item_count;
+                }else if(key==SDLK_LEFT){
+                    adjustShaderSetting(-1);
+                }else if(key==SDLK_RIGHT){
+                    adjustShaderSetting(1);
+                }else if(key==SDLK_RETURN||key==SDLK_KP_ENTER){
+                    if(shader_sel==shaderSettingsBackIndex())screen=Screen::Miscellaneous;
+                    else if(shader_sel==0)cycleShader(1);
+                }
+            }
+            return SDL_APP_CONTINUE;
+        }
+
+        if(screen==Screen::Textures){
+            if(ev.type==SDL_EVENT_KEY_DOWN&&!ev.key.repeat){
+                const auto key=ev.key.key;
+                const int item_count=textureSettingsItemCount();
+                if(key==SDLK_ESCAPE){
+                    screen=Screen::Miscellaneous;
+                }else if(key==SDLK_UP){
+                    texture_sel=(texture_sel+item_count-1)%item_count;
+                }else if(key==SDLK_DOWN){
+                    texture_sel=(texture_sel+1)%item_count;
+                }else if(key==SDLK_LEFT){
+                    adjustTextureSetting(-1);
+                }else if(key==SDLK_RIGHT){
+                    adjustTextureSetting(1);
+                }else if(key==SDLK_RETURN||key==SDLK_KP_ENTER){
+                    if(texture_sel==textureSettingsBackIndex())screen=Screen::Miscellaneous;
+                    else if(texture_sel==0)cycleTexture(1);
+                }
+            }
+            return SDL_APP_CONTINUE;
+        }
+
+        if(screen==Screen::Palettes){
+            if(ev.type==SDL_EVENT_KEY_DOWN&&!ev.key.repeat){
+                const auto key=ev.key.key;
+                if(key==SDLK_ESCAPE||key==SDLK_RETURN||key==SDLK_KP_ENTER){
+                    screen=Screen::Miscellaneous;
+                }else if(key==SDLK_UP||key==SDLK_LEFT){
+                    palette_sel=(palette_sel+kVisualPaletteCount-1)%kVisualPaletteCount;
+                    cfg.palette=static_cast<VisualPalette>(palette_sel);
+                    saveConfig(config_path,cfg);
+                }else if(key==SDLK_DOWN||key==SDLK_RIGHT){
+                    palette_sel=(palette_sel+1)%kVisualPaletteCount;
+                    cfg.palette=static_cast<VisualPalette>(palette_sel);
+                    saveConfig(config_path,cfg);
+                }
             }
             return SDL_APP_CONTINUE;
         }
@@ -1456,7 +1685,7 @@ struct AppState {
                 }
                 if (key == SDLK_F6) {
                     run.advance(timestamp);
-                    openReplaySaveDialog(run.snapshot(), timestamp, true);
+                    openReplaySaveDialog(run.prepareReplay(), timestamp, true);
                     return SDL_APP_CONTINUE;
                 }
                 const auto action = keyAction(cfg, key);
@@ -1490,7 +1719,13 @@ struct AppState {
         frame_start = SDL_GetTicksNS();
         const auto now = frame_start;
         processReplayDialog();
+#if defined(__EMSCRIPTEN__)
+        processWebReplayDecode();
+#endif
         processSeedClipboard();
+        setVisualPalette(cfg.palette);
+        setVisualTexture(cfg);
+        setVisualShader(cfg);
 
         if (screen == Screen::Game && run.game) {
             run.advance(now);
@@ -1517,7 +1752,7 @@ struct AppState {
             if (!replay_status.empty()) {
                 info.status = replay_status;
             } else if (viewer.paused) {
-                if (viewer.rep.final_hash.empty()) {
+                if (!viewer.rep.final_hash.has_value()) {
                     info.status = "UNVERIFIED REPLAY";
                 } else if (const auto verified = viewer.visibleVerificationResult(); verified.has_value()) {
                     info.status = *verified ? "REPLAY VERIFIED" : "REPLAY HASH FAILED";
@@ -1537,11 +1772,18 @@ struct AppState {
         } else if (screen == Screen::Controls) {
             renderControls(ren, cfg, controls_sel, rebinding, wait_pad);
         } else if (screen == Screen::Miscellaneous) {
-            renderMiscellaneous(ren);
+            renderMiscellaneous(ren, cfg, misc_sel);
+        } else if (screen == Screen::Shaders) {
+            renderShaderSettings(ren, cfg, shader_sel);
+        } else if (screen == Screen::Textures) {
+            renderTextureSettings(ren, cfg, texture_sel);
+        } else if (screen == Screen::Palettes) {
+            renderPaletteSettings(ren, cfg, palette_sel);
         } else if (screen == Screen::Help) {
             renderHelp(ren);
         }
 
+        applyVisualShader(ren);
         SDL_RenderPresent(ren);
 
 #ifndef __EMSCRIPTEN__
@@ -1568,11 +1810,14 @@ struct AppState {
 } // namespace
 
 #if defined(__EMSCRIPTEN__)
-extern "C" EMSCRIPTEN_KEEPALIVE void fastris_web_replay_loaded_bytes(const unsigned char* data, int size) {
+extern "C" EMSCRIPTEN_KEEPALIVE void fastris_web_replay_loaded_bytes(unsigned char* data, int size) {
     ReplayDialogResult result;
     result.action=ReplayDialogAction::Load;
-    if(data&&size>=0) result.contents=std::string(reinterpret_cast<const char*>(data),static_cast<std::size_t>(size));
-    else result.error="browser returned an empty replay";
+    if(data&&size>=0) result.web_buffer.emplace(data,static_cast<std::size_t>(size));
+    else {
+        if(data)std::free(data);
+        result.error="browser returned an empty replay";
+    }
     postWebReplayResult(std::move(result));
 }
 

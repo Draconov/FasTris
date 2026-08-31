@@ -3,7 +3,9 @@
 #include "board.hpp"
 #include "garbage.hpp"
 #include "types.hpp"
+#include "sha256.hpp"
 #include <cstdint>
+#include <span>
 #include <string>
 #include <vector>
 
@@ -38,8 +40,11 @@ public:
     std::string deterministicState() const;
     ClearKind lastClear() const { return last_clear_; }
     int lastAttack() const { return last_attack_visual_; }
+    void setSemanticEventCapture(bool enabled);
+    std::span<const GameEvent> semanticEvents() const { return semantic_events_; }
+    void clearSemanticEvents() { semantic_events_.clear(); }
 
-    friend std::string stateHash(const Game& game);
+    friend Sha256Digest stateHash(const Game& game);
 
 private:
     void spawn(Piece forced=Piece::None);
@@ -64,6 +69,7 @@ private:
     void seedStartingGarbage(int lines);
     void checkModeCompletion();
     int estimatedOptimalFinesseInputs() const;
+    void emitSemanticEvent(GameEventKind kind,int value);
 
     std::uint64_t seed_{};
     Mode mode_{};
@@ -104,6 +110,8 @@ private:
     int piece_input_count_{};
     int piece_spawn_x_{3};
     Rotation piece_spawn_rot_{Rotation::Spawn};
+    bool capture_semantic_events_{};
+    std::vector<GameEvent> semantic_events_;
 };
 
 } // namespace fasttris

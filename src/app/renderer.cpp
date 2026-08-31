@@ -17,6 +17,78 @@ struct Canvas { float w{960.0f}; float h{720.0f}; float scale{1.0f}; };
 
 float g_offset_x = 0.0f;
 float g_offset_y = 0.0f;
+VisualPalette g_visual_palette = VisualPalette::Default;
+struct TextureRuntime {
+    VisualTexture mode{VisualTexture::Default};
+    int cell_gap{2};
+    int depth{35};
+    int highlight{35};
+    int shadow{30};
+    int border{2};
+    int softness{35};
+    int reflection{40};
+    int edge_light{40};
+    int inner_darken{20};
+    int transparency{10};
+    int contrast{30};
+    int pattern_scale{4};
+    int dot_size{2};
+    int dot_spacing{6};
+    int angle{1};
+    int spacing{5};
+    int line_thickness{1};
+    int grid_size{6};
+};
+TextureRuntime g_texture{};
+
+struct ShaderRuntime {
+    VisualShader mode{VisualShader::None};
+    int strength{50};
+    int scanlines{35};
+    int scanline_spacing{4};
+    int glow{30};
+    int curvature{35};
+    int vignette{25};
+    int softness{15};
+    int persistence{25};
+    int flicker{10};
+    int pixel_grid{20};
+    int grid_size{8};
+    int subpixel{25};
+    int sharpness{60};
+    int dot_size{2};
+    int dot_spacing{6};
+    int dot_brightness{35};
+    int radius{50};
+    int threshold{65};
+    int trail_length{3};
+    int noise{20};
+    int horizontal_jitter{10};
+    int distortion{15};
+    int rgb_offset{2};
+    int direction{0};
+    int line_thickness{1};
+    int bloom{25};
+};
+ShaderRuntime g_shader{};
+
+Uint8 clampByte(int value){return static_cast<Uint8>(std::clamp(value,0,255));}
+C paletteColor(C c){
+    if(g_visual_palette==VisualPalette::Default)return c;
+    const int y=(54*int(c.r)+183*int(c.g)+19*int(c.b)+128)>>8;
+    switch(g_visual_palette){
+        case VisualPalette::Hacker:
+            return {clampByte(y*18/100),clampByte(y*108/100),clampByte(y*34/100),c.a};
+        case VisualPalette::Amber:
+            return {clampByte(y*112/100),clampByte(y*66/100),clampByte(y*12/100),c.a};
+        case VisualPalette::BlackWhite:
+            return {static_cast<Uint8>(y),static_cast<Uint8>(y),static_cast<Uint8>(y),c.a};
+        case VisualPalette::MintBlue:
+            return {clampByte(y*48/100),clampByte(y*100/100),clampByte(y*112/100),c.a};
+        default:
+            return c;
+    }
+}
 
 Canvas beginCanvas(SDL_Renderer* r, bool center_design = true) {
     int output_w = 960;
@@ -39,7 +111,7 @@ Canvas beginCanvas(SDL_Renderer* r, bool center_design = true) {
 }
 
 C color(Piece p){switch(p){case Piece::I:return{60,210,230,255};case Piece::J:return{70,100,230,255};case Piece::L:return{240,150,55,255};case Piece::O:return{235,210,65,255};case Piece::S:return{80,210,100,255};case Piece::T:return{175,80,220,255};case Piece::Z:return{225,70,80,255};case Piece::Garbage:return{100,110,120,255};default:return{0,0,0,0};}}
-void set(SDL_Renderer*r,C c){SDL_SetRenderDrawColor(r,c.r,c.g,c.b,c.a);}
+void set(SDL_Renderer*r,C c){c=paletteColor(c);SDL_SetRenderDrawColor(r,c.r,c.g,c.b,c.a);}
 void fill(SDL_Renderer*r,float x,float y,float w,float h,C c){set(r,c);SDL_FRect q{x+g_offset_x,y+g_offset_y,w,h};SDL_RenderFillRect(r,&q);}
 void outline(SDL_Renderer*r,float x,float y,float w,float h,C c){set(r,c);SDL_FRect q{x+g_offset_x,y+g_offset_y,w,h};SDL_RenderRect(r,&q);}
 void txt(SDL_Renderer*r,float x,float y,const std::string&s,C c={220,225,232,255},bool big=false){
@@ -55,8 +127,479 @@ void txt(SDL_Renderer*r,float x,float y,const std::string&s,C c={220,225,232,255
 }
 void txtf(SDL_Renderer*r,float x,float y,C c,const char*fmt,...){char b[256];va_list ap;va_start(ap,fmt);std::vsnprintf(b,sizeof(b),fmt,ap);va_end(ap);txt(r,x,y,b,c);}
 const char* clearName(ClearKind k){switch(k){case ClearKind::Single:return"SINGLE";case ClearKind::Double:return"DOUBLE";case ClearKind::Triple:return"TRIPLE";case ClearKind::Quad:return"QUAD";case ClearKind::MiniNoLine:return"T-SPIN MINI";case ClearKind::MiniSingle:return"T-SPIN MINI SINGLE";case ClearKind::MiniDouble:return"T-SPIN MINI DOUBLE";case ClearKind::TSpinNoLine:return"T-SPIN";case ClearKind::TSpinSingle:return"T-SPIN SINGLE";case ClearKind::TSpinDouble:return"T-SPIN DOUBLE";case ClearKind::TSpinTriple:return"T-SPIN TRIPLE";default:return"";}}
-void drawMini(SDL_Renderer*r,Piece p,float ox,float oy,float s){if(p==Piece::None)return;auto bs=blocks(p,Rotation::Spawn);int minx=4,maxx=0,miny=4,maxy=0;for(auto b:bs){minx=std::min(minx,b.x);maxx=std::max(maxx,b.x);miny=std::min(miny,b.y);maxy=std::max(maxy,b.y);}float cx=ox-(minx+maxx+1)*s/2.0f,cy=oy-(miny+maxy+1)*s/2.0f;for(auto b:bs){auto cc=color(p);fill(r,cx+b.x*s+1,cy+b.y*s+1,s-2,s-2,cc);}}
+
+C shade(C c,int amount){
+    amount=std::clamp(amount,-100,100);
+    auto one=[&](Uint8 v){
+        if(amount>=0)return clampByte(int(v)+(255-int(v))*amount/100);
+        return clampByte(int(v)*(100+amount)/100);
+    };
+    return {one(c.r),one(c.g),one(c.b),c.a};
+}
+C alpha(C c,int a){c.a=static_cast<Uint8>(std::clamp(a,0,255));return c;}
+
+template<std::size_t N>
+void fillBatch(SDL_Renderer*r,std::array<SDL_FRect,N>&rects,int count,C c){
+    if(count<=0)return;
+    c=paletteColor(c);SDL_SetRenderDrawColor(r,c.r,c.g,c.b,c.a);
+    for(int i=0;i<count;++i){rects[static_cast<std::size_t>(i)].x+=g_offset_x;rects[static_cast<std::size_t>(i)].y+=g_offset_y;}
+    SDL_RenderFillRects(r,rects.data(),count);
+}
+
+void drawNestedBorder(SDL_Renderer*r,float x,float y,float w,float h,int thickness,C c){
+    thickness=std::clamp(thickness,1,6);
+    for(int i=0;i<thickness;++i){
+        const float inset=float(i);
+        if(w-inset*2<=1||h-inset*2<=1)break;
+        outline(r,x+inset,y+inset,w-inset*2,h-inset*2,c);
+    }
+}
+
+void drawTexturedCell(SDL_Renderer*r,float x,float y,float size,C base){
+    const int max_gap=std::max(0,std::min(6,int(size)-4));
+    const float gap=float(std::clamp(g_texture.cell_gap,0,max_gap));
+    const float ix=x+gap*0.5f,iy=y+gap*0.5f;
+    const float w=std::max(2.0f,size-gap),h=w;
+    const int border=std::clamp(g_texture.border,1,std::max(1,std::min(6,int(w/4))));
+    const C hi=shade(base,std::clamp(g_texture.highlight,0,100));
+    const C sh=shade(base,-std::clamp(g_texture.shadow,0,100));
+    const C edge=shade(base,std::clamp(g_texture.edge_light,0,100));
+    const C inner=shade(base,-std::clamp(g_texture.inner_darken,0,100));
+
+    switch(g_texture.mode){
+        case VisualTexture::Default:{
+            fill(r,ix,iy,w,h,base);
+            const float pad=std::max(1.0f,std::min(3.0f,w*0.20f));
+            const float line=std::max(1.0f,std::min(4.0f,h-pad*2));
+            const C top{clampByte(int(base.r)+35),clampByte(int(base.g)+35),clampByte(int(base.b)+35),base.a};
+            fill(r,ix+pad,iy+pad,std::max(1.0f,w-pad*2),line,top);
+            break;
+        }
+        case VisualTexture::Flat:
+            fill(r,ix,iy,w,h,base);
+            break;
+        case VisualTexture::Beveled:{
+            fill(r,ix,iy,w,h,base);
+            const float d=std::clamp(1.0f+w*(g_texture.depth/100.0f)*0.18f,1.0f,std::max(1.0f,w*0.25f));
+            fill(r,ix,iy,w,d,hi);fill(r,ix,iy,d,h,hi);
+            fill(r,ix,iy+h-d,w,d,sh);fill(r,ix+w-d,iy,d,h,sh);
+            drawNestedBorder(r,ix,iy,w,h,border,shade(base,-12));
+            break;
+        }
+        case VisualTexture::SoftBevel:{
+            fill(r,ix,iy,w,h,base);
+            const int layers=1+g_texture.softness/35;
+            const float maxd=std::clamp(1.0f+w*(g_texture.depth/100.0f)*0.15f,1.0f,std::max(1.0f,w*0.22f));
+            for(int n=0;n<layers;++n){
+                const float d=std::max(1.0f,maxd-float(n));
+                const int fade=std::max(6,100-n*22);
+                fill(r,ix+n,iy+n,w-2*n,1,alpha(hi,255*fade/100));
+                fill(r,ix+n,iy+n,1,h-2*n,alpha(hi,255*fade/100));
+                fill(r,ix+n,iy+h-n-d,w-2*n,1,alpha(sh,255*fade/100));
+                fill(r,ix+w-n-d,iy+n,1,h-2*n,alpha(sh,255*fade/100));
+            }
+            break;
+        }
+        case VisualTexture::Glass:{
+            const int a=255*(100-std::clamp(g_texture.transparency,0,70))/100;
+            fill(r,ix,iy,w,h,alpha(base,a));
+            fill(r,ix+w*0.10f,iy+h*0.47f,w*0.80f,h*0.43f,alpha(inner,std::max(50,a*3/4)));
+            const float band=std::max(1.0f,h*(0.08f+0.12f*g_texture.reflection/100.0f));
+            fill(r,ix+w*0.10f,iy+h*0.12f,w*0.80f,band,alpha(shade(base,75),40+g_texture.reflection*2));
+            drawNestedBorder(r,ix,iy,w,h,1,alpha(edge,100+g_texture.edge_light));
+            break;
+        }
+        case VisualTexture::Neon:
+            fill(r,ix,iy,w,h,shade(base,-45-g_texture.inner_darken/3));
+            drawNestedBorder(r,ix,iy,w,h,border,edge);
+            if(w>8)drawNestedBorder(r,ix+border+1,iy+border+1,w-2*(border+1),h-2*(border+1),1,alpha(shade(base,65),90+g_texture.edge_light));
+            break;
+        case VisualTexture::Metallic:{
+            fill(r,ix,iy,w,h,shade(base,-8));
+            std::array<SDL_FRect,16> rects{};int count=0;
+            const int spacing=std::max(3,g_texture.spacing);
+            const int thick=std::clamp(g_texture.line_thickness,1,4);
+            for(float yy=iy+2;yy<iy+h-1&&count<int(rects.size());yy+=spacing){rects[count++]={ix+1,yy,w-2,float(thick)};}
+            fillBatch(r,rects,count,alpha(shade(base,45+g_texture.contrast/3),90+g_texture.highlight));
+            fill(r,ix,iy+h*0.48f,w,std::max(1.0f,h*0.10f),alpha(shade(base,65),80+g_texture.highlight));
+            break;
+        }
+        case VisualTexture::Pixel:{
+            fill(r,ix,iy,w,h,base);
+            std::array<SDL_FRect,16> rects{};int count=0;
+            const float ps=float(std::max(2,g_texture.pattern_scale));
+            int row=0;
+            for(float yy=iy+1;yy<iy+h-1&&count<int(rects.size());yy+=ps,++row){
+                int col=0;
+                for(float xx=ix+1;xx<ix+w-1&&count<int(rects.size());xx+=ps,++col){if(((row+col)&1)==0)rects[count++]={xx,yy,std::min(ps-1,ix+w-xx-1),std::min(ps-1,iy+h-yy-1)};}
+            }
+            fillBatch(r,rects,count,alpha(shade(base,-std::max(8,g_texture.contrast/2)),100+g_texture.contrast));
+            break;
+        }
+        case VisualTexture::Dots:{
+            fill(r,ix,iy,w,h,base);
+            std::array<SDL_FRect,32> rects{};int count=0;
+            const float spacing=float(std::max(g_texture.dot_spacing,g_texture.dot_size+1));
+            const float dot=float(std::min(g_texture.dot_size,int(std::max(1.0f,w/4))));
+            for(float yy=iy+spacing*0.5f;yy+dot<=iy+h&&count<int(rects.size());yy+=spacing)
+                for(float xx=ix+spacing*0.5f;xx+dot<=ix+w&&count<int(rects.size());xx+=spacing)rects[count++]={xx,yy,dot,dot};
+            fillBatch(r,rects,count,alpha(shade(base,25+g_texture.contrast/2),130+g_texture.contrast));
+            break;
+        }
+        case VisualTexture::Stripes:{
+            fill(r,ix,iy,w,h,base);
+            std::array<SDL_FRect,32> rects{};int count=0;
+            const int spacing=std::max(3,g_texture.spacing),thick=std::clamp(g_texture.line_thickness,1,4);
+            if(g_texture.angle==0){for(float yy=iy;yy<iy+h&&count<int(rects.size());yy+=spacing)rects[count++]={ix,yy,w,float(thick)};}
+            else if(g_texture.angle==2){for(float xx=ix;xx<ix+w&&count<int(rects.size());xx+=spacing)rects[count++]={xx,iy,float(thick),h};}
+            else{
+                const int direction=g_texture.angle==1?1:-1;
+                const int tile=std::max(2,spacing/2);
+                for(int row=0;row<int(h)&&count<int(rects.size());row+=tile){
+                    int phase=(direction*row)%spacing;if(phase<0)phase+=spacing;
+                    for(int col=-phase;col<int(w)&&count<int(rects.size());col+=spacing){
+                        const int x0=std::max(0,col);
+                        const int x1=std::min(int(w),col+std::max(1,thick+1));
+                        if(x1>x0)rects[count++]={ix+float(x0),iy+float(row),float(x1-x0),float(std::min(tile,int(h)-row))};
+                    }
+                }
+            }
+            fillBatch(r,rects,count,alpha(shade(base,-10-g_texture.contrast/2),80+g_texture.contrast));
+            break;
+        }
+        case VisualTexture::Grid:{
+            fill(r,ix,iy,w,h,base);
+            std::array<SDL_FRect,24> rects{};int count=0;
+            const int step=std::max(3,g_texture.grid_size),thick=std::clamp(g_texture.line_thickness,1,4);
+            for(float xx=ix+step;xx<ix+w&&count<int(rects.size());xx+=step)rects[count++]={xx,iy,float(thick),h};
+            for(float yy=iy+step;yy<iy+h&&count<int(rects.size());yy+=step)rects[count++]={ix,yy,w,float(thick)};
+            fillBatch(r,rects,count,alpha(shade(base,-15-g_texture.contrast/2),90+g_texture.contrast));
+            break;
+        }
+        case VisualTexture::Wireframe:
+            fill(r,ix,iy,w,h,alpha(shade(base,-70),90));
+            drawNestedBorder(r,ix,iy,w,h,border,edge);
+            break;
+        case VisualTexture::Outline:
+            fill(r,ix,iy,w,h,inner);
+            drawNestedBorder(r,ix,iy,w,h,border,base);
+            break;
+        case VisualTexture::Hollow:
+            fill(r,ix,iy,w,h,alpha(shade(base,-80),55));
+            drawNestedBorder(r,ix,iy,w,h,border,edge);
+            break;
+        case VisualTexture::Raised:{
+            fill(r,ix,iy,w,h,base);
+            const float d=std::clamp(1.0f+w*(g_texture.depth/100.0f)*0.14f,1.0f,std::max(1.0f,w*0.20f));
+            fill(r,ix,iy,w,d,hi);fill(r,ix,iy,d,h,hi);fill(r,ix,iy+h-d,w,d,sh);fill(r,ix+w-d,iy,d,h,sh);
+            fill(r,ix+d,iy+d,w-2*d,h-2*d,shade(base,8));
+            break;
+        }
+        case VisualTexture::Recessed:{
+            fill(r,ix,iy,w,h,base);
+            const float d=std::clamp(1.0f+w*(g_texture.depth/100.0f)*0.14f,1.0f,std::max(1.0f,w*0.20f));
+            fill(r,ix,iy,w,d,sh);fill(r,ix,iy,d,h,sh);fill(r,ix,iy+h-d,w,d,hi);fill(r,ix+w-d,iy,d,h,hi);
+            fill(r,ix+d,iy+d,w-2*d,h-2*d,shade(base,-8));
+            break;
+        }
+        case VisualTexture::Arcade:{
+            fill(r,ix,iy,w,h,base);
+            const float d=std::max(2.0f,std::min(5.0f,1.0f+w*g_texture.depth/650.0f));
+            fill(r,ix,iy,w,d,shade(base,30+g_texture.highlight/2));
+            fill(r,ix,iy,d,h,shade(base,20+g_texture.edge_light/2));
+            fill(r,ix,iy+h-d,w,d,shade(base,-30));fill(r,ix+w-d,iy,d,h,shade(base,-30));
+            drawNestedBorder(r,ix,iy,w,h,border,shade(base,-18));
+            fill(r,ix+w*0.18f,iy+h*0.18f,w*0.45f,std::max(1.0f,h*0.10f),alpha(shade(base,70),120+g_texture.highlight));
+            break;
+        }
+        case VisualTexture::RetroLCD:{
+            fill(r,ix,iy,w,h,shade(base,-20-g_texture.inner_darken/3));
+            std::array<SDL_FRect,32> rects{};int count=0;
+            const int step=std::max(3,g_texture.grid_size);
+            const float dot=std::max(1.0f,std::min(float(g_texture.dot_spacing/3),float(step-1)));
+            for(float yy=iy+2;yy<iy+h-1&&count<int(rects.size());yy+=step)
+                for(float xx=ix+2;xx<ix+w-1&&count<int(rects.size());xx+=step)rects[count++]={xx,yy,dot,dot};
+            fillBatch(r,rects,count,alpha(shade(base,35+g_texture.contrast/3),115+g_texture.contrast));
+            drawNestedBorder(r,ix,iy,w,h,1,shade(base,-35));
+            break;
+        }
+        default:
+            fill(r,ix,iy,w,h,base);
+            break;
+    }
+}
+
+void drawMini(SDL_Renderer*r,Piece p,float ox,float oy,float s){if(p==Piece::None)return;auto bs=blocks(p,Rotation::Spawn);int minx=4,maxx=0,miny=4,maxy=0;for(auto b:bs){minx=std::min(minx,b.x);maxx=std::max(maxx,b.x);miny=std::min(miny,b.y);maxy=std::max(maxy,b.y);}float cx=ox-(minx+maxx+1)*s/2.0f,cy=oy-(miny+maxy+1)*s/2.0f;for(auto b:bs)drawTexturedCell(r,cx+b.x*s,cy+b.y*s,s,color(p));}
 void actionLabel(SDL_Renderer*r,float x,float y,const ReplayEvent&e){std::string s=std::string(e.down?"+":"-")+std::string(actionName(e.action));txt(r,x,y,s,{150,160,175,255});}
+}
+
+void setVisualPalette(VisualPalette palette){
+    const int value=std::clamp(static_cast<int>(palette),0,kVisualPaletteCount-1);
+    g_visual_palette=static_cast<VisualPalette>(value);
+}
+
+void setVisualTexture(const AppConfig& cfg){
+    g_texture.mode=cfg.texture;
+    g_texture.cell_gap=cfg.texture_cell_gap;
+    g_texture.depth=cfg.texture_depth;
+    g_texture.highlight=cfg.texture_highlight;
+    g_texture.shadow=cfg.texture_shadow;
+    g_texture.border=cfg.texture_border;
+    g_texture.softness=cfg.texture_softness;
+    g_texture.reflection=cfg.texture_reflection;
+    g_texture.edge_light=cfg.texture_edge_light;
+    g_texture.inner_darken=cfg.texture_inner_darken;
+    g_texture.transparency=cfg.texture_transparency;
+    g_texture.contrast=cfg.texture_contrast;
+    g_texture.pattern_scale=cfg.texture_pattern_scale;
+    g_texture.dot_size=cfg.texture_dot_size;
+    g_texture.dot_spacing=cfg.texture_dot_spacing;
+    g_texture.angle=cfg.texture_angle;
+    g_texture.spacing=cfg.texture_spacing;
+    g_texture.line_thickness=cfg.texture_line_thickness;
+    g_texture.grid_size=cfg.texture_grid_size;
+}
+
+void setVisualShader(const AppConfig& cfg){
+    g_shader.mode=cfg.shader;
+    g_shader.strength=cfg.shader_strength;
+    g_shader.scanlines=cfg.shader_scanlines;
+    g_shader.scanline_spacing=cfg.shader_scanline_spacing;
+    g_shader.glow=cfg.shader_glow;
+    g_shader.curvature=cfg.crt_curvature;
+    g_shader.vignette=cfg.shader_vignette;
+    g_shader.softness=cfg.shader_softness;
+    g_shader.persistence=cfg.shader_persistence;
+    g_shader.flicker=cfg.shader_flicker;
+    g_shader.pixel_grid=cfg.shader_pixel_grid;
+    g_shader.grid_size=cfg.shader_grid_size;
+    g_shader.subpixel=cfg.shader_subpixel;
+    g_shader.sharpness=cfg.shader_sharpness;
+    g_shader.dot_size=cfg.shader_dot_size;
+    g_shader.dot_spacing=cfg.shader_dot_spacing;
+    g_shader.dot_brightness=cfg.shader_dot_brightness;
+    g_shader.radius=cfg.shader_radius;
+    g_shader.threshold=cfg.shader_threshold;
+    g_shader.trail_length=cfg.shader_trail_length;
+    g_shader.noise=cfg.shader_noise;
+    g_shader.horizontal_jitter=cfg.shader_horizontal_jitter;
+    g_shader.distortion=cfg.shader_distortion;
+    g_shader.rgb_offset=cfg.shader_rgb_offset;
+    g_shader.direction=cfg.shader_direction;
+    g_shader.line_thickness=cfg.shader_line_thickness;
+    g_shader.bloom=cfg.shader_bloom;
+}
+
+namespace {
+void setRaw(SDL_Renderer*r,C c){SDL_SetRenderDrawColor(r,c.r,c.g,c.b,c.a);}
+void fillAbs(SDL_Renderer*r,float x,float y,float w,float h,C c){setRaw(r,c);SDL_FRect q{x,y,w,h};SDL_RenderFillRect(r,&q);}
+void outlineAbs(SDL_Renderer*r,float x,float y,float w,float h,C c){setRaw(r,c);SDL_FRect q{x,y,w,h};SDL_RenderRect(r,&q);}
+int effectAlpha(int local_percent,int max_alpha=255){
+    const int local=std::clamp(local_percent,0,100);
+    const int strength=std::clamp(g_shader.strength,0,100);
+    return std::clamp(max_alpha*local*strength/10000,0,255);
+}
+void applyScanlines(SDL_Renderer*r,int w,int h,int spacing,int thickness,int alpha){
+    spacing=std::max(2,spacing);thickness=std::clamp(thickness,1,std::max(1,spacing-1));
+    for(int y=0;y<h;y+=spacing)fillAbs(r,0,float(y),float(w),float(thickness),{0,0,0,static_cast<Uint8>(std::clamp(alpha,0,255))});
+}
+void applyPixelGrid(SDL_Renderer*r,int w,int h,int step,int thickness,int alpha){
+    step=std::max(4,step);thickness=std::clamp(thickness,1,std::max(1,step-1));
+    const Uint8 light=static_cast<Uint8>(std::clamp(alpha,0,255));
+    const Uint8 dark=static_cast<Uint8>(std::clamp(alpha/2,0,255));
+    for(int x=0;x<w;x+=step)fillAbs(r,float(x),0,float(thickness),float(h),{255,255,255,light});
+    for(int y=0;y<h;y+=step)fillAbs(r,0,float(y),float(w),float(thickness),{0,0,0,dark});
+}
+void applyDotMatrix(SDL_Renderer*r,int w,int h,int spacing,int dot_size,int alpha){
+    spacing=std::max(4,spacing);dot_size=std::clamp(dot_size,1,std::max(1,spacing-1));
+    const Uint8 a=static_cast<Uint8>(std::clamp(alpha,0,255));
+    for(int y=spacing/2;y<h;y+=spacing)for(int x=spacing/2;x<w;x+=spacing)
+        fillAbs(r,float(x),float(y),float(dot_size),float(dot_size),{255,255,255,a});
+}
+void applyVignette(SDL_Renderer*r,int w,int h,int alpha,int radius,int softness){
+    if(alpha<=0)return;
+    const int layers=6+std::clamp(softness,0,100)/8;
+    const float radius_scale=0.35f+0.60f*(std::clamp(radius,0,100)/100.0f);
+    const float max_x=w*(1.0f-radius_scale)*0.5f;
+    const float max_y=h*(1.0f-radius_scale)*0.5f;
+    for(int i=0;i<layers;++i){
+        const float t=float(i+1)/layers;
+        const Uint8 a=static_cast<Uint8>(std::clamp(int(alpha*t*t),0,255));
+        const float ix=max_x*t,iy=max_y*t;
+        fillAbs(r,0,0,float(w),std::max(1.0f,iy/layers),{0,0,0,a});
+        fillAbs(r,0,float(h)-std::max(1.0f,iy/layers),float(w),std::max(1.0f,iy/layers),{0,0,0,a});
+        fillAbs(r,0,0,std::max(1.0f,ix/layers),float(h),{0,0,0,a});
+        fillAbs(r,float(w)-std::max(1.0f,ix/layers),0,std::max(1.0f,ix/layers),float(h),{0,0,0,a});
+    }
+}
+void applyCurvature(SDL_Renderer*r,int w,int h,int alpha,int curvature){
+    if(curvature<=0||alpha<=0)return;
+    const float curve=(curvature/100.0f)*std::min(w,h)*0.10f;
+    const int band=std::max(24,std::min(w,h)/4);
+    for(int y=0;y<h;++y){
+        const int edge=std::min(y,h-1-y);if(edge>=band)continue;
+        const float t=float(band-edge)/band;const float inset=curve*t*t;
+        const Uint8 a=static_cast<Uint8>(std::clamp(int(alpha*t),0,255));
+        if(inset>0.5f){fillAbs(r,0,float(y),inset,1,{0,0,0,a});fillAbs(r,float(w)-inset,float(y),inset,1,{0,0,0,a});}
+    }
+    for(int x=0;x<w;++x){
+        const int edge=std::min(x,w-1-x);if(edge>=band)continue;
+        const float t=float(band-edge)/band;const float inset=curve*t*t;
+        const Uint8 a=static_cast<Uint8>(std::clamp(int(alpha*t),0,255));
+        if(inset>0.5f){fillAbs(r,float(x),0,1,inset,{0,0,0,a});fillAbs(r,float(x),float(h)-inset,1,inset,{0,0,0,a});}
+    }
+    outlineAbs(r,2,2,float(w)-4,float(h)-4,{255,255,255,static_cast<Uint8>(std::clamp(alpha/4,0,255))});
+}
+void applyBloom(SDL_Renderer*r,int w,int h,int alpha,int radius,int softness,C tint={255,255,255,255}){
+    if(alpha<=0)return;
+    const Uint8 haze=static_cast<Uint8>(std::clamp(alpha/(12-std::min(8,softness/13)),0,255));
+    fillAbs(r,0,0,float(w),float(h),{tint.r,tint.g,tint.b,haze});
+    const int bands=2+std::clamp(softness,0,100)/20;
+    const float extent=0.12f+0.33f*(std::clamp(radius,0,100)/100.0f);
+    const float cx=w*0.5f,cy=h*0.5f;
+    for(int i=0;i<bands;++i){
+        const float t=float(i+1)/bands;
+        const float bw=w*extent*t,bh=h*extent*t;
+        fillAbs(r,cx-bw,cy-bh,bw*2,bh*2,{tint.r,tint.g,tint.b,static_cast<Uint8>(std::clamp(alpha/(8+i*2),0,255))});
+    }
+}
+void applyFlicker(SDL_Renderer*r,int w,int h,int alpha){
+    if(alpha<=0)return;
+    const Uint64 tick=SDL_GetTicks();
+    const int pulse=int((tick/19)%17);
+    const int a=alpha*(4+pulse%5)/8;
+    if((tick/73)%2==0)fillAbs(r,0,0,float(w),float(h),{255,255,255,static_cast<Uint8>(std::clamp(a/8,0,255))});
+    else fillAbs(r,0,0,float(w),float(h),{0,0,0,static_cast<Uint8>(std::clamp(a/10,0,255))});
+}
+void applyAnalogNoise(SDL_Renderer*r,int w,int h,int noise_alpha,int jitter_alpha,int distortion_alpha){
+    const Uint64 tick=SDL_GetTicks();
+    const int lines=4+std::clamp(g_shader.noise,0,100)/6;
+    for(int i=0;i<lines;++i){
+        const int y=int((tick/7+i*53)%std::max(1,h-2));
+        const int len=50+int((tick/11+i*97)%std::max(51,w/2));
+        const int max_x=std::max(1,w-len);
+        const int jitter=(g_shader.horizontal_jitter*(i%3-1)*w)/3000;
+        const int x=std::clamp(int((tick/13+i*131)%max_x)+jitter,0,std::max(0,w-len));
+        fillAbs(r,float(x),float(y),float(len),1,{255,255,255,static_cast<Uint8>(std::clamp(noise_alpha,0,255))});
+    }
+    for(int i=0;i<3+g_shader.distortion/20;++i){
+        const int y=int((tick/37+i*101)%std::max(1,h-6));
+        const int height=1+g_shader.distortion/35;
+        fillAbs(r,float(std::max(0,(i-1)*g_shader.horizontal_jitter/4)),float(y),float(w),float(height),{0,0,0,static_cast<Uint8>(std::clamp(distortion_alpha,0,255))});
+    }
+    if(jitter_alpha>0){
+        for(int i=0;i<3;++i){const int y=int((tick/23+i*149)%std::max(1,h));fillAbs(r,0,float(y),float(w),1,{255,255,255,static_cast<Uint8>(std::clamp(jitter_alpha/3,0,255))});}
+    }
+}
+void applyChromatic(SDL_Renderer*r,int w,int h,int alpha,int offset,int direction){
+    if(alpha<=0||offset<=0)return;
+    const Uint8 a=static_cast<Uint8>(std::clamp(alpha,0,255));
+    const int step=std::max(6,offset*4+4);
+    if(direction==0||direction==2||direction==3){
+        for(int x=0;x<w;x+=step){
+            fillAbs(r,float(x),0,1,float(h),{255,70,80,static_cast<Uint8>(a/3)});
+            fillAbs(r,float(std::min(w-1,x+offset)),0,1,float(h),{70,180,255,static_cast<Uint8>(a/3)});
+        }
+    }
+    if(direction==1||direction==2||direction==3){
+        for(int y=0;y<h;y+=step){
+            const int shifted=(direction==3)?-offset:offset;
+            fillAbs(r,0,float(y),float(w),1,{255,70,80,static_cast<Uint8>(a/3)});
+            fillAbs(r,0,float(std::clamp(y+shifted,0,h-1)),float(w),1,{70,180,255,static_cast<Uint8>(a/3)});
+        }
+    }
+}
+void applyGhosting(SDL_Renderer*r,int w,int h,int alpha,int persistence,int trails){
+    if(alpha<=0)return;
+    trails=std::clamp(trails,1,8);
+    const int distance=1+std::clamp(persistence,0,100)/20;
+    for(int i=0;i<trails;++i){
+        const int off=(i+1)*distance;
+        if(off*2>=w||off*2>=h)break;
+        outlineAbs(r,float(off),float(off),float(w-off*2),float(h-off*2),{170,220,255,static_cast<Uint8>(std::clamp(alpha/(2+i),0,255))});
+    }
+}
+void applyLcdSubpixels(SDL_Renderer*r,int w,int h,int alpha,int step){
+    if(alpha<=0)return;
+    step=std::max(6,step);
+    const Uint8 a=static_cast<Uint8>(std::clamp(alpha,0,255));
+    for(int x=0;x<w;x+=step){
+        fillAbs(r,float(x),0,1,float(h),{255,80,80,a});
+        fillAbs(r,float(x+std::max(1,step/3)),0,1,float(h),{80,255,110,a});
+        fillAbs(r,float(x+std::max(2,2*step/3)),0,1,float(h),{80,170,255,a});
+    }
+}
+}
+
+void applyVisualShader(SDL_Renderer*r){
+    if(g_shader.mode==VisualShader::None||g_shader.strength<=0)return;
+    int w=960,h=720;
+    if(!SDL_GetRenderOutputSize(r,&w,&h)||w<=0||h<=0){w=960;h=720;}
+    float old_sx=1,old_sy=1;SDL_GetRenderScale(r,&old_sx,&old_sy);SDL_SetRenderScale(r,1,1);
+
+    switch(g_shader.mode){
+        case VisualShader::None:break;
+        case VisualShader::CRT:
+            applyBloom(r,w,h,effectAlpha(g_shader.glow,64),55,g_shader.softness);
+            applyScanlines(r,w,h,g_shader.scanline_spacing,1,effectAlpha(g_shader.scanlines,90));
+            applyVignette(r,w,h,effectAlpha(g_shader.vignette,100),55,g_shader.softness);
+            applyCurvature(r,w,h,effectAlpha(g_shader.curvature,125),g_shader.curvature);
+            if(g_shader.softness>0)fillAbs(r,0,0,float(w),float(h),{255,255,255,static_cast<Uint8>(effectAlpha(g_shader.softness,18))});
+            break;
+        case VisualShader::Terminal:
+            applyBloom(r,w,h,effectAlpha(g_shader.glow,70),45,55,{155,255,180,255});
+            applyScanlines(r,w,h,4,1,effectAlpha(g_shader.scanlines,80));
+            applyGhosting(r,w,h,effectAlpha(g_shader.persistence,40),g_shader.persistence,2+g_shader.persistence/35);
+            applyFlicker(r,w,h,effectAlpha(g_shader.flicker,90));
+            break;
+        case VisualShader::LCD:{
+            const int haze=effectAlpha(100-g_shader.sharpness,28);
+            if(haze>0)fillAbs(r,0,0,float(w),float(h),{235,245,255,static_cast<Uint8>(haze)});
+            applyPixelGrid(r,w,h,g_shader.grid_size,1,effectAlpha(g_shader.pixel_grid,70));
+            applyLcdSubpixels(r,w,h,effectAlpha(g_shader.subpixel,55),g_shader.grid_size);
+            break;
+        }
+        case VisualShader::DotMatrix:
+            applyDotMatrix(r,w,h,g_shader.dot_spacing,g_shader.dot_size,effectAlpha(g_shader.dot_brightness,100));
+            break;
+        case VisualShader::Bloom:{
+            const int threshold_factor=100-std::clamp(g_shader.threshold,0,100)/2;
+            applyBloom(r,w,h,effectAlpha(threshold_factor,110),g_shader.radius,g_shader.softness);
+            break;
+        }
+        case VisualShader::Phosphor:
+            applyBloom(r,w,h,effectAlpha(g_shader.glow,90),60,55,{145,255,180,255});
+            applyGhosting(r,w,h,effectAlpha(g_shader.persistence,70),g_shader.persistence,g_shader.trail_length);
+            applyScanlines(r,w,h,4,1,effectAlpha(g_shader.scanlines,70));
+            break;
+        case VisualShader::Scanlines:
+            applyScanlines(r,w,h,g_shader.scanline_spacing,g_shader.line_thickness,effectAlpha(100,105));
+            break;
+        case VisualShader::Vignette:
+            applyVignette(r,w,h,effectAlpha(100,130),g_shader.radius,g_shader.softness);
+            break;
+        case VisualShader::Analog:
+            applyFlicker(r,w,h,effectAlpha(g_shader.flicker,80));
+            applyAnalogNoise(r,w,h,effectAlpha(g_shader.noise,65),effectAlpha(g_shader.horizontal_jitter,45),effectAlpha(g_shader.distortion,90));
+            break;
+        case VisualShader::Chromatic:
+            applyChromatic(r,w,h,effectAlpha(100,75),g_shader.rgb_offset,g_shader.direction);
+            break;
+        case VisualShader::Ghosting:
+            applyGhosting(r,w,h,effectAlpha(g_shader.persistence,95),g_shader.persistence,g_shader.trail_length);
+            break;
+        case VisualShader::PixelGrid:
+            applyPixelGrid(r,w,h,g_shader.grid_size,g_shader.line_thickness,effectAlpha(100,80));
+            break;
+        case VisualShader::Arcade:
+            applyBloom(r,w,h,effectAlpha(g_shader.bloom,75),55,45);
+            applyScanlines(r,w,h,4,1,effectAlpha(g_shader.scanlines,75));
+            applyPixelGrid(r,w,h,8,1,effectAlpha(g_shader.pixel_grid,35));
+            applyVignette(r,w,h,effectAlpha(g_shader.vignette,90),55,50);
+            break;
+        default:break;
+    }
+    SDL_SetRenderScale(r,old_sx,old_sy);
 }
 
 void renderGame(SDL_Renderer*r,Game&g,const RenderInfo&i){
@@ -79,10 +622,10 @@ void renderGame(SDL_Renderer*r,Game&g,const RenderInfo&i){
     // playfield
     fill(r,bx-4,by-4,board_w+8,board_h+8,{30,35,45,255});
     fill(r,bx,by,board_w,board_h,{14,18,24,255});
-    for(int yy=0;yy<kVisibleH;++yy)for(int x=0;x<kBoardW;++x){int y=yy+kHiddenH;auto p=g.board().cell(x,y);if(p!=Piece::None){auto c=color(p);fill(r,bx+x*cell+1,by+yy*cell+1,cell-2,cell-2,c);fill(r,bx+x*cell+4,by+yy*cell+4,cell-8,4,{Uint8(std::min(255,c.r+35)),Uint8(std::min(255,c.g+35)),Uint8(std::min(255,c.b+35)),255});}}
+    for(int yy=0;yy<kVisibleH;++yy)for(int x=0;x<kBoardW;++x){int y=yy+kHiddenH;auto p=g.board().cell(x,y);if(p!=Piece::None)drawTexturedCell(r,bx+x*cell,by+yy*cell,cell,color(p));}
     if(g.active().piece!=Piece::None){
         if(g.rules().ghost){auto a=g.active();a.y=g.ghostY();for(auto b:blocks(a.piece,a.rot)){int y=a.y+b.y-kHiddenH;if(y>=0){auto c=color(a.piece);c.a=85;outline(r,bx+(a.x+b.x)*cell+3,by+y*cell+3,cell-6,cell-6,c);}}}
-        auto&a=g.active();for(auto b:blocks(a.piece,a.rot)){int y=a.y+b.y-kHiddenH;if(y>=0&&y<kVisibleH){auto c=color(a.piece);fill(r,bx+(a.x+b.x)*cell+1,by+y*cell+1,cell-2,cell-2,c);}}
+        auto&a=g.active();for(auto b:blocks(a.piece,a.rot)){int y=a.y+b.y-kHiddenH;if(y>=0&&y<kVisibleH)drawTexturedCell(r,bx+(a.x+b.x)*cell,by+y*cell,cell,color(a.piece));}
     }
     txt(r,bx,by-38,"FASTRIS",{235,240,248,255},true);
     txt(r,bx+120,by-34,std::string(modeName(g.mode())),{130,210,255,255},true);
@@ -308,7 +851,7 @@ void renderSettings(SDL_Renderer*r,const AppConfig&c,int sel,bool editing,const 
         "Apply the locked competitive ruleset during runs.",
         "Open seed setup, randomize, copy and paste tools.",
         "Open the dedicated keyboard and gamepad rebinding screen.",
-        "Future graphics area for shaders, textures and palettes.",
+        "Graphics area for shaders, textures and the active presentation palette.",
         "Restore gameplay/display preferences. Seed and controls stay unchanged."
     };
 
@@ -419,18 +962,172 @@ void renderControls(SDL_Renderer*r,const AppConfig&c,int sel,bool rebinding,bool
     }
 }
 
-void renderMiscellaneous(SDL_Renderer*r){
+void renderMiscellaneous(SDL_Renderer*r,const AppConfig&cfg,int sel){
     beginCanvas(r,true);
     set(r,{11,14,20,255});SDL_RenderClear(r);
     txt(r,300,70,"MISCELLANEOUS",{235,240,248,255},true);
-    txt(r,265,180,"GRAPHICS",{145,155,170,255},true);
-    txt(r,265,230,"SHADERS",{210,215,225,255},true);
-    txt(r,520,230,"FUTURE",{120,135,155,255});
-    txt(r,265,285,"TEXTURES",{210,215,225,255},true);
-    txt(r,520,285,"FUTURE",{120,135,155,255});
-    txt(r,265,340,"PALETTES",{210,215,225,255},true);
-    txt(r,520,340,"FUTURE",{120,135,155,255});
-    txt(r,265,610,"ESC back to Settings",{135,145,160,255});
+    txt(r,265,155,"GRAPHICS",{145,155,170,255},true);
+
+    const std::array<std::string,kMiscItemCount> items={"SHADERS","TEXTURES","PALETTES"};
+    for(int n=0;n<kMiscItemCount;++n){
+        txt(r,265,220+n*70,(n==sel?"> ":"  ")+items[n],n==sel?C{120,220,255,255}:C{210,215,225,255},true);
+        if(n==kMiscShadersIndex)txt(r,500,224+n*70,shaderName(cfg.shader),{155,205,220,255});
+        else if(n==kMiscTexturesIndex)txt(r,500,224+n*70,textureName(cfg.texture),{155,205,220,255});
+        else txt(r,500,224+n*70,paletteName(cfg.palette),{155,205,220,255});
+    }
+
+    txt(r,265,470,"Shaders, textures and palettes are renderer-only presentation settings.",{155,168,185,255});
+    txt(r,265,500,"Procedural textures use SDL primitives only: no image assets or decoding.",{155,168,185,255});
+    if(sel==kMiscShadersIndex)txt(r,265,550,"ENTER open shader settings",{150,205,220,255},true);
+    else if(sel==kMiscTexturesIndex)txt(r,265,550,"ENTER open procedural texture settings",{150,205,220,255},true);
+    else txt(r,265,550,"ENTER open palette settings",{150,205,220,255},true);
+    txt(r,265,620,"UP/DOWN select   ENTER open   ESC back to Settings",{135,145,160,255});
+}
+
+void renderPaletteSettings(SDL_Renderer*r,const AppConfig&cfg,int sel){
+    beginCanvas(r,true);
+    set(r,{11,14,20,255});SDL_RenderClear(r);
+    txt(r,330,48,"PALETTES",{235,240,248,255},true);
+    txt(r,248,88,"UP/DOWN previews and applies immediately",{145,155,170,255});
+
+    for(int n=0;n<kVisualPaletteCount;++n){
+        const auto palette=static_cast<VisualPalette>(n);
+        const bool active=palette==cfg.palette;
+        const bool selected=n==sel;
+        const float y=150.0f+n*82.0f;
+        if(selected)fill(r,225,y-11,510,58,{20,27,37,255});
+        outline(r,225,y-11,510,58,selected?C{120,220,255,255}:C{45,55,70,255});
+        txt(r,248,y,(selected?"> ":"  ")+std::string(paletteName(palette)),selected?C{120,220,255,255}:C{210,215,225,255},true);
+        if(active)txt(r,610,y+4,"ACTIVE",{125,220,170,255});
+    }
+
+    txt(r,235,585,"HACKER: green terminal   AMBER: warm Fallout-style terminal",{155,168,185,255});
+    txt(r,235,612,"BLACK & WHITE: monochrome   MINT BLUE: cool mint/cyan",{155,168,185,255});
+    txt(r,235,650,"UP/DOWN or LEFT/RIGHT choose   ENTER/ESC back",{135,145,160,255});
+}
+
+
+void renderTextureSettings(SDL_Renderer*r,const AppConfig&cfg,int sel){
+    beginCanvas(r,true);
+    set(r,{11,14,20,255});SDL_RenderClear(r);
+    txt(r,330,24,"TEXTURES",{235,240,248,255},true);
+    txt(r,202,62,"Procedural block textures change instantly and stay independent of palettes/shaders.",{145,155,170,255});
+
+    const auto controls=textureControls(cfg.texture);
+    const int back_index=static_cast<int>(controls.size())+1;
+    const int item_count=back_index+1;
+    const float first_y=102.0f;
+    const float available_h=400.0f;
+    const float step=std::clamp(available_h/std::max(1,item_count),38.0f,54.0f);
+    const float frame_h=std::min(44.0f,step-3.0f);
+
+    auto drawRow=[&](int index,const std::string&label,const std::string&value,bool accent=false){
+        const float y=first_y+step*index;
+        const bool selected=index==sel;
+        if(selected)fill(r,190,y-7,580,frame_h,{20,27,37,255});
+        outline(r,190,y-7,580,frame_h,selected?C{120,220,255,255}:C{45,55,70,255});
+        const C label_color=selected?C{120,220,255,255}:accent?C{245,180,110,255}:C{210,215,225,255};
+        txt(r,212,y+5,(selected?"> ":"  ")+label,label_color,true);
+        if(!value.empty())txt(r,585,y+8,value,selected?C{150,230,255,255}:C{155,205,220,255});
+    };
+
+    drawRow(0,"TEXTURE",textureName(cfg.texture));
+    for(std::size_t i=0;i<controls.size();++i)drawRow(static_cast<int>(i)+1,textureControlName(controls[i]),textureControlValueText(cfg,controls[i]));
+    drawRow(back_index,"BACK","",true);
+
+    // Live preview uses the exact same cell renderer as gameplay and hold/next.
+    const float preview_y=535.0f;
+    txt(r,195,preview_y-24,"LIVE PREVIEW",{145,155,170,255},true);
+    const float ps=28.0f;
+    drawTexturedCell(r,345,preview_y,ps,color(Piece::T));
+    drawTexturedCell(r,345+ps,preview_y,ps,color(Piece::T));
+    drawTexturedCell(r,345+ps*2,preview_y,ps,color(Piece::T));
+    drawTexturedCell(r,345+ps,preview_y-ps,ps,color(Piece::T));
+    drawTexturedCell(r,490,preview_y-ps,ps,color(Piece::I));
+    drawTexturedCell(r,490,preview_y,ps,color(Piece::I));
+    drawTexturedCell(r,490,preview_y+ps,ps,color(Piece::I));
+    drawTexturedCell(r,490,preview_y+ps*2,ps,color(Piece::I));
+
+    const char* desc="";
+    switch(cfg.texture){
+        case VisualTexture::Default:desc="Original FasTris blocks with the classic top highlight.";break;
+        case VisualTexture::Flat:desc="Fastest minimalist solid-cell rendering.";break;
+        case VisualTexture::Beveled:desc="Hard bevel with independent depth, highlight, shadow and border.";break;
+        case VisualTexture::SoftBevel:desc="Softer layered bevel for gentler dimensional blocks.";break;
+        case VisualTexture::Glass:desc="Transparent glass body, reflection band, lit edge and dark interior.";break;
+        case VisualTexture::Neon:desc="Dark interior with bright configurable glowing-style edges.";break;
+        case VisualTexture::Metallic:desc="Metal panel bands and highlights with adjustable contrast.";break;
+        case VisualTexture::Pixel:desc="Chunky checker/pixel surface generated inside each occupied cell.";break;
+        case VisualTexture::Dots:desc="Batched dot pattern; spacing and size stay bounded for fast rendering.";break;
+        case VisualTexture::Stripes:desc="Horizontal, vertical or diagonal procedural stripe pattern.";break;
+        case VisualTexture::Grid:desc="Subdivided cell grid with adjustable size, thickness and contrast.";break;
+        case VisualTexture::Wireframe:desc="Mostly dark cell interior with a bright structural frame.";break;
+        case VisualTexture::Outline:desc="Filled dark center plus a strong piece-colored outline.";break;
+        case VisualTexture::Hollow:desc="Nearly empty center with a bright configurable frame.";break;
+        case VisualTexture::Raised:desc="Embossed tile with raised lighting direction.";break;
+        case VisualTexture::Recessed:desc="Inset/debossed tile with reversed edge lighting.";break;
+        case VisualTexture::Arcade:desc="Chunky cabinet-style bevel with bright specular accent.";break;
+        case VisualTexture::RetroLCD:desc="Segmented LCD-like dot/cell structure inside each tetromino cell.";break;
+        default:break;
+    }
+    txt(r,195,652,desc,{155,168,185,255});
+    txt(r,195,676,"UP/DOWN select   LEFT/RIGHT change   ENTER cycle/open   ESC back",{135,145,160,255});
+}
+
+void renderShaderSettings(SDL_Renderer*r,const AppConfig&cfg,int sel){
+    beginCanvas(r,true);
+    set(r,{11,14,20,255});SDL_RenderClear(r);
+    txt(r,342,26,"SHADERS",{235,240,248,255},true);
+    txt(r,230,66,"Controls change with the selected shader and apply immediately.",{145,155,170,255});
+
+    const auto controls=shaderControls(cfg.shader);
+    const int back_index=static_cast<int>(controls.size())+1;
+    const int item_count=back_index+1;
+    const float first_y=110.0f;
+    const float available_h=430.0f;
+    const float step=std::clamp(available_h/std::max(1,item_count),42.0f,58.0f);
+    const float frame_h=std::min(46.0f,step-4.0f);
+
+    auto drawRow=[&](int index,const std::string&label,const std::string&value,bool accent=false){
+        const float y=first_y+step*index;
+        const bool selected=index==sel;
+        if(selected)fill(r,205,y-8,550,frame_h,{20,27,37,255});
+        outline(r,205,y-8,550,frame_h,selected?C{120,220,255,255}:C{45,55,70,255});
+        const C label_color=selected?C{120,220,255,255}:accent?C{245,180,110,255}:C{210,215,225,255};
+        txt(r,226,y+5,(selected?"> ":"  ")+label,label_color,true);
+        if(!value.empty())txt(r,565,y+8,value,selected?C{150,230,255,255}:C{155,205,220,255});
+    };
+
+    drawRow(0,"SHADER",shaderName(cfg.shader));
+    for(std::size_t i=0;i<controls.size();++i){
+        drawRow(static_cast<int>(i)+1,shaderControlName(controls[i]),shaderControlValueText(cfg,controls[i]));
+    }
+    drawRow(back_index,"BACK","",true);
+
+    const char* desc1="";
+    const char* desc2="";
+    switch(cfg.shader){
+        case VisualShader::None: desc1="Clean default output with no post-processing.";desc2="Choose another shader to reveal its own controls.";break;
+        case VisualShader::CRT: desc1="CRT exposes scanlines, spacing, glow, curvature, vignette and softness.";desc2="Curvature bends/darkens the screen edges and is unique to CRT.";break;
+        case VisualShader::Terminal: desc1="Terminal exposes scanlines, glow, phosphor persistence and flicker.";desc2="Pairs naturally with Hacker or Amber palettes.";break;
+        case VisualShader::LCD: desc1="LCD exposes pixel grid, grid size, subpixel strength and sharpness.";desc2="Useful for a crisp flat-panel / handheld display look.";break;
+        case VisualShader::DotMatrix: desc1="Dot Matrix exposes dot size, spacing and dot brightness.";desc2="The pattern can range from fine texture to chunky matrix cells.";break;
+        case VisualShader::Bloom: desc1="Bloom exposes radius, threshold and softness.";desc2="Higher softness spreads the glow; threshold controls how restrained it feels.";break;
+        case VisualShader::Phosphor: desc1="Phosphor exposes glow, persistence, trail length and scanlines.";desc2="Use persistence and trail length for stronger old-display afterimage flavor.";break;
+        case VisualShader::Scanlines: desc1="Scanlines exposes spacing and line thickness.";desc2="A lightweight display effect with no extra CRT treatment.";break;
+        case VisualShader::Vignette: desc1="Vignette exposes radius and softness.";desc2="Lower radius makes the darkened edge region reach further inward.";break;
+        case VisualShader::Analog: desc1="Analog exposes noise, flicker, horizontal jitter and distortion.";desc2="Keep values low for subtle instability or push them for a damaged signal look.";break;
+        case VisualShader::Chromatic: desc1="Chromatic exposes RGB offset and direction.";desc2="Direction cycles horizontal, vertical and two diagonal variants.";break;
+        case VisualShader::Ghosting: desc1="Ghosting exposes persistence and trail length.";desc2="Higher values make the display afterimage treatment more obvious.";break;
+        case VisualShader::PixelGrid: desc1="Pixel Grid exposes grid size and line thickness.";desc2="Use larger cells for a stronger panel / pixel-display structure.";break;
+        case VisualShader::Arcade: desc1="Arcade exposes its bloom, scanlines, vignette and pixel-grid mix.";desc2="Tune the four components independently while Strength controls the whole effect.";break;
+        default:break;
+    }
+
+    txt(r,205,565,desc1,{155,168,185,255});
+    txt(r,205,590,desc2,{155,168,185,255});
+    txt(r,205,628,"UP/DOWN select   LEFT/RIGHT change   ENTER cycle/open   ESC back",{135,145,160,255});
+    txt(r,205,652,"All shader settings are presentation-only and saved in fastris.cfg.",{125,175,190,255});
 }
 
 void renderHelp(SDL_Renderer*r){beginCanvas(r,true);set(r,{11,14,20,255});SDL_RenderClear(r);txt(r,360,35,"HELP",{235,240,248,255},true);std::array<const char*,17> l={"Gameplay uses SDL event nanosecond timestamps.","OS key repeat is ignored; DAS/ARR are engine-driven.","Same seed + rules + input events = same simulation.","","Default keys:","Arrows: left/right/down    Space: hard drop","Up: rotate CW             Z: rotate CCW","A: rotate 180             C: hold","P: pause                  F5: restart","F6: save replay to file   ESC: menu","","Replay viewer:","Space pause, Left/Right seek 1 second","1/2/4/8 speed, N next piece, F6 save copy","","Seed and control rebinding are available from Settings.","Command line: --seed N --mode sprint --replay file"};for(int n=0;n<(int)l.size();++n)txt(r,160,105+n*30,l[n],{190,198,210,255},n<3);txt(r,160,660,"ESC back",{130,140,155,255});}

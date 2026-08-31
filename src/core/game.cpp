@@ -21,6 +21,15 @@ Game::Game(std::uint64_t seed, Mode mode, Rules rules)
     restart(seed,mode);
 }
 
+void Game::setSemanticEventCapture(bool enabled) {
+    capture_semantic_events_=enabled;
+    semantic_events_.clear();
+}
+
+void Game::emitSemanticEvent(GameEventKind kind,int value) {
+    if(capture_semantic_events_) semantic_events_.push_back({now_us_,kind,value});
+}
+
 void Game::restart(std::uint64_t seed, Mode mode) {
     seed_=seed;mode_=mode;board_.clear();bag_.reset(seed_);
     garbage_.reset(splitMix64(seed_^0xA11CEULL));cheese_rng_.seed(splitMix64(seed_^0xC4EE5EULL),0xC4EE5EULL);
@@ -28,7 +37,7 @@ void Game::restart(std::uint64_t seed, Mode mode) {
     now_us_=0;next_gravity_us_=kNever;lock_deadline_us_=kNever;next_horizontal_us_=kNever;
     grounded_=false;lock_resets_=0;game_over_=false;complete_=false;paused_=false;
     left_held_=right_held_=soft_held_=false;cw_held_=ccw_held_=rot180_held_=hold_held_=false;horiz_dir_=0;outgoing_attack_=0;last_attack_visual_=0;
-    last_action_rotation_=false;last_kick_index_=-1;last_clear_=ClearKind::None;
+    last_action_rotation_=false;last_kick_index_=-1;last_clear_=ClearKind::None;semantic_events_.clear();
     if(mode_==Mode::Cheese40) seedCheese();
     else if(mode_==Mode::Custom && rules_.custom_start_garbage>0) seedStartingGarbage(rules_.custom_start_garbage);
     spawn();
@@ -238,6 +247,10 @@ void Game::lockPiece(){
     if(spin!=Spin::None) ++stats_.tspins;
     if(pc) ++stats_.perfect_clears;
     ++stats_.pieces;
+    emitSemanticEvent(GameEventKind::PieceLocked,stats_.pieces);
+    if(cr.lines>0) emitSemanticEvent(GameEventKind::LinesCleared,stats_.lines);
+    if(spin!=Spin::None) emitSemanticEvent(GameEventKind::TSpin,stats_.tspins);
+    if(pc) emitSemanticEvent(GameEventKind::PerfectClear,stats_.perfect_clears);
     int uncancelled=garbage_.cancel(sr.attack);outgoing_attack_+=uncancelled;last_attack_visual_=uncancelled;
     if(mode_==Mode::Cheese40 && cr.garbage_lines>0){
         int remain=std::max(0,40-stats_.garbage_lines_cleared);int add=std::min(cr.garbage_lines,remain);
@@ -315,24 +328,76 @@ void Game::release(Action a){
 void Game::advanceTo(TimeUs target){
     if(target<now_us_||game_over_||complete_)return;
     if(paused_)return;
+
+    // Timers should never fall behind simulation time, but checkpoint restore,
+    // future rule changes, or a malformed state must not turn one stale timer
+    // into millions of 1-us catch-up iterations. Clamp overdue work to "now"
+    // so it is processed exactly once on the next loop pass.
+    auto repairStaleTimers=[&](){
+        if(next_horizontal_us_<now_us_)next_horizontal_us_=now_us_;
+        if(next_gravity_us_<now_us_)next_gravity_us_=now_us_;
+        if(grounded_&&lock_deadline_us_<now_us_)lock_deadline_us_=now_us_;
+    };
+
+    constexpr std::size_t kMaxAdvanceIterations=1'000'000u;
+    std::size_t iterations=0;
+    unsigned same_timestamp_passes=0;
+
     while(now_us_<target){
         if(game_over_||complete_)break;
-        TimeUs next=target;next=std::min(next,next_horizontal_us_);next=std::min(next,next_gravity_us_);if(grounded_)next=std::min(next,lock_deadline_us_);
+        if(++iterations>kMaxAdvanceIterations){
+            // This is a last-resort anti-stall guard. Valid FasTris rules should
+            // never approach it in one advanceTo() call. Fast-forwarding makes
+            // any corrupted replay fail its final hash instead of freezing UI.
+            now_us_=target;
+            stats_.elapsed_us=now_us_;
+            break;
+        }
+
+        repairStaleTimers();
+        const TimeUs before_now=now_us_;
+        TimeUs next=target;
+        next=std::min(next,next_horizontal_us_);
+        next=std::min(next,next_gravity_us_);
+        if(grounded_)next=std::min(next,lock_deadline_us_);
         const TimeUs limit=modeTimeLimit();
         if(limit<kNever/2)next=std::min(next,limit);
-        if(next<now_us_) next=now_us_;
-        now_us_=next; stats_.elapsed_us=now_us_;
+        if(next<now_us_)next=now_us_;
+        now_us_=next;
+        stats_.elapsed_us=now_us_;
+
         if(limit<kNever/2&&now_us_>=limit){complete_=true;active_.piece=Piece::None;break;}
+
         bool progressed=false;
         if(next_horizontal_us_==now_us_){processHorizontalRepeat();progressed=true;}
         if(!game_over_&&!complete_&&next_gravity_us_==now_us_){
-            bool moved=tryMove(0,1,false,false);if(moved&&soft_held_&&rules_.handling.sdf>0){++stats_.score;++stats_.soft_drop_cells;}
-            if(!moved) refreshGrounded(false);
-            scheduleGravityFromNow(); progressed=true;
+            const bool moved=tryMove(0,1,false,false);
+            if(moved&&soft_held_&&rules_.handling.sdf>0){++stats_.score;++stats_.soft_drop_cells;}
+            if(!moved)refreshGrounded(false);
+            scheduleGravityFromNow();
+            progressed=true;
         }
         if(!game_over_&&!complete_&&grounded_&&lock_deadline_us_<=now_us_){lockPiece();progressed=true;}
         if(now_us_==target)break;
-        if(!progressed && next==now_us_){++now_us_;stats_.elapsed_us=now_us_;}
+
+        if(now_us_==before_now){
+            ++same_timestamp_passes;
+            if(!progressed||same_timestamp_passes>16){
+                // A same-timestamp loop after due work was processed indicates
+                // an invariant violation. Repair the due timers to a bounded
+                // future point instead of spinning at 1 us per iteration.
+                if(next_horizontal_us_<=now_us_){
+                    if(horiz_dir_==0)next_horizontal_us_=kNever;
+                    else if(rules_.handling.arr_ms<=0)next_horizontal_us_=kNever;
+                    else next_horizontal_us_=now_us_+ms(std::max(1,rules_.handling.arr_ms));
+                }
+                if(next_gravity_us_<=now_us_)scheduleGravityFromNow();
+                if(grounded_&&lock_deadline_us_<=now_us_)lock_deadline_us_=now_us_+std::max<TimeUs>(1,ms(std::max(0,rules_.handling.lock_delay_ms)));
+                same_timestamp_passes=0;
+            }
+        }else{
+            same_timestamp_passes=0;
+        }
     }
     const TimeUs limit=modeTimeLimit();
     stats_.elapsed_us=(limit<kNever/2)?std::min(now_us_,limit):now_us_;

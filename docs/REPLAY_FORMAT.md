@@ -7,7 +7,7 @@ A replay stores only deterministic inputs and the information required to reprod
 - piece seed
 - game mode and simulation rules
 - total simulated duration
-- timestamped input transitions
+- timestamped gameplay input transitions
 - final deterministic-state SHA-256
 
 It does not store video frames or board snapshots on disk.
@@ -26,46 +26,50 @@ Numeric metadata is encoded with unsigned variable-length integers where practic
 [varuint timestamp delta] [1-byte action/pressed value]
 ```
 
-The timestamp is the delta from the previous event in integer microseconds. The event byte stores the action ID in the low bits and the pressed/released state in the high bit.
+The timestamp is the delta from the previous event in integer microseconds. The event byte stores one of the eight gameplay actions (`Left` through `Hold`) in the low bits and pressed/released state in the high bit. Pause and Restart are application controls and are not legal replay events.
 
-The final SHA-256 is stored as 32 raw bytes rather than 64 hexadecimal characters.
+The final SHA-256 is stored as 32 raw bytes. The in-memory replay representation uses the same raw 32-byte digest, avoiding hex conversion on normal replay paths.
 
-This makes replay size scale primarily with the number of actual input transitions rather than run duration.
+## Bounded decoding and validation
 
-## Validation limits
-
-The parser is strict and bounded before any replay is simulated. It rejects malformed or unreasonable data, including:
+The parser is strict and bounded before simulation. It rejects malformed or unreasonable data, including:
 
 - files larger than the current replay-size limit
 - unsupported magic/layout
-- invalid modes, actions, flags, or rule ranges
+- invalid modes, gameplay actions, flags, or rule ranges
 - more than the allowed number of events
-- timestamps that overflow, exceed replay duration, or decode incorrectly
+- timestamps that overflow or exceed replay duration
 - durations beyond the replay limit
 - malformed/truncated hashes
 - unexpected trailing bytes
 
-Delta timestamps inherently preserve monotonic event order in the encoded stream.
+Delta timestamps inherently preserve monotonic event order.
+
+Native tools can decode the compact format synchronously because normal files are tiny. The Web build uses the same `ReplayDecoder` incrementally with both a per-frame time budget and an event-count budget, so a hostile maximum-size replay cannot monopolize the browser UI thread while being parsed.
 
 ## Verification and indexing
 
-Loading a replay starts one incremental deterministic re-simulation. The app gives that work a small per-frame budget so long replays do not freeze the Web build.
-
-That single pass performs several jobs at once:
+Loading a replay starts one incremental deterministic re-simulation. The same pass:
 
 - verifies the final deterministic-state hash
-- creates in-memory seek checkpoints approximately every five seconds
-- indexes piece locks
-- indexes line clears
-- indexes T-spins
-- indexes Perfect Clears
+- builds bounded in-memory seek checkpoints
+- records exact piece-lock markers
+- records exact line-clear markers
+- records exact T-spin markers
+- records exact Perfect Clear markers
 
-The checkpoints are runtime-only and are not written into `.ftr`, keeping replay files small. Backward seeking restores the nearest checkpoint and simulates only the short remaining interval instead of starting from zero.
+Analysis markers are emitted directly by the game engine at the exact simulation timestamp. They are not inferred by periodically comparing statistics.
 
-When normal playback itself reaches the replay end, FasTris performs one additional cheap hash of the viewer's already-computed final state. No verification is repeated every frame.
+Normal replays use approximately five-second checkpoints. Very long replays automatically increase checkpoint spacing so the index never exceeds the hard checkpoint-count limit. Checkpoints remain runtime-only and are never written into `.ftr`.
+
+Backward/long forward seeking restores the nearest available checkpoint and simulates only the short remaining interval instead of rebuilding from time zero.
+
+The game clock also repairs stale scheduled timers and has an anti-stall iteration guard, so corrupted/future state cannot turn an overdue timer into millions of one-microsecond catch-up loops.
+
+When normal playback reaches the replay end, FasTris performs one additional cheap hash of the viewer's already-computed final state. No verification is repeated every frame.
 
 ## What verification means
 
 `REPLAY VERIFIED` means the stored inputs deterministically reproduce the final state/hash recorded by the replay.
 
-SHA-256 is an integrity checksum, not a client authenticity signature. A modified client can create a modified replay and calculate a new hash. A competitive server must therefore validate the replay and independently re-simulate it, deriving score, time, lines, and other results itself instead of trusting client-provided result fields.
+SHA-256 is an integrity checksum, not a client-authenticity signature. A modified client can create a modified replay and calculate a new hash. A competitive server must validate the replay and independently re-simulate it, deriving score, time, lines, and other results itself instead of trusting client-provided result fields.
