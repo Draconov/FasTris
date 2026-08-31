@@ -14,6 +14,7 @@ public:
     Piece peek(std::size_t i) { ensure(i+1); return q_[i]; }
     std::vector<Piece> preview(std::size_t n) { ensure(n); return {q_.begin(), q_.begin()+static_cast<std::ptrdiff_t>(n)}; }
     std::uint64_t rngState() const { return rng_.state(); }
+    std::uint64_t rngStream() const { return rng_.stream(); }
     const std::deque<Piece>& queue() const { return q_; }
 private:
     void ensure(std::size_t n) {

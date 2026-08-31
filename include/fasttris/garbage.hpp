@@ -15,6 +15,10 @@ public:
     int readyLines(TimeUs now) const;
     int popReadyHole(TimeUs now, int messiness_pct);
     bool empty() const { return q_.empty(); }
+    const std::deque<GarbagePacket>& packets() const { return q_; }
+    std::uint64_t rngState() const { return rng_.state(); }
+    std::uint64_t rngStream() const { return rng_.stream(); }
+    int lastHole() const { return last_hole_; }
 private:
     std::deque<GarbagePacket> q_;
     Pcg32 rng_;

@@ -109,6 +109,7 @@ if(FASTTRIS_BUILD_APP)
             "SHELL:-sALLOW_MEMORY_GROWTH=1"
             "SHELL:-sMAXIMUM_MEMORY=1073741824"
             "SHELL:-sEXPORTED_RUNTIME_METHODS=ccall"
+            "SHELL:-sEXPORTED_FUNCTIONS=_main,_malloc,_free"
         )
     endif()
 endif()

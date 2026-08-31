@@ -4,8 +4,8 @@
 #include "fasttris/replay.hpp"
 #include <SDL3/SDL.h>
 #include <cstdint>
+#include <span>
 #include <string>
-#include <vector>
 
 namespace fasttris::app {
 struct RenderInfo {
@@ -16,7 +16,7 @@ struct RenderInfo {
     bool show_inputs{true};
     double replay_speed{1.0};
     std::string status;
-    std::vector<ReplayEvent> recent_inputs;
+    std::span<const ReplayEvent> recent_inputs;
 };
 
 enum SettingsItem : int {

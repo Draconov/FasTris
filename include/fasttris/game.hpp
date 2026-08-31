@@ -39,6 +39,8 @@ public:
     ClearKind lastClear() const { return last_clear_; }
     int lastAttack() const { return last_attack_visual_; }
 
+    friend std::string stateHash(const Game& game);
+
 private:
     void spawn(Piece forced=Piece::None);
     bool tryMove(int dx, int dy, bool reset_lock, bool count_finesse=false);

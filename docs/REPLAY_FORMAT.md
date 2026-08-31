@@ -1,29 +1,71 @@
-# Replay format v1
+# Replay format
 
-FasTris replay files are UTF-8 text so runs remain easy to inspect during development.
+FasTris `.ftr` files use the current compact binary replay format. Legacy text replay layouts are intentionally unsupported.
 
-Example:
+A replay stores only deterministic inputs and the information required to reproduce the run:
+
+- piece seed
+- game mode and simulation rules
+- total simulated duration
+- timestamped input transitions
+- final deterministic-state SHA-256
+
+It does not store video frames or board snapshots on disk.
+
+## Binary layout
+
+The file begins with the fixed eight-byte current-format magic:
 
 ```text
-FASTTRIS_REPLAY 1
-seed 12345
-mode 0
-das 140
-arr 25
-...
-event 15321 left 1
-event 42110 left 0
-event 48652 cw 1
-event 61100 cw 0
-event 70200 hard 1
-duration 70200
-hash <sha256>
+FASTRIS 0x01
 ```
 
-Times are integer microseconds from the start of the simulated run, excluding paused wall-clock time.
+Numeric metadata is encoded with unsigned variable-length integers where practical. Input events are stored as:
 
-FasTris intentionally supports only the current replay layout. The loader requires the current field set and rejects missing or unknown fields instead of maintaining legacy replay behavior.
+```text
+[varuint timestamp delta] [1-byte action/pressed value]
+```
 
-Sandbox-mode settings are stored in the replay as well, including gravity, line goal, time limit, and starting garbage.
+The timestamp is the delta from the previous event in integer microseconds. The event byte stores the action ID in the low bits and the pressed/released state in the high bit.
 
-The final hash is SHA-256 over the current canonical deterministic-state serialization. A verifier rebuilds the run from the replay and compares the hash.
+The final SHA-256 is stored as 32 raw bytes rather than 64 hexadecimal characters.
+
+This makes replay size scale primarily with the number of actual input transitions rather than run duration.
+
+## Validation limits
+
+The parser is strict and bounded before any replay is simulated. It rejects malformed or unreasonable data, including:
+
+- files larger than the current replay-size limit
+- unsupported magic/layout
+- invalid modes, actions, flags, or rule ranges
+- more than the allowed number of events
+- timestamps that overflow, exceed replay duration, or decode incorrectly
+- durations beyond the replay limit
+- malformed/truncated hashes
+- unexpected trailing bytes
+
+Delta timestamps inherently preserve monotonic event order in the encoded stream.
+
+## Verification and indexing
+
+Loading a replay starts one incremental deterministic re-simulation. The app gives that work a small per-frame budget so long replays do not freeze the Web build.
+
+That single pass performs several jobs at once:
+
+- verifies the final deterministic-state hash
+- creates in-memory seek checkpoints approximately every five seconds
+- indexes piece locks
+- indexes line clears
+- indexes T-spins
+- indexes Perfect Clears
+
+The checkpoints are runtime-only and are not written into `.ftr`, keeping replay files small. Backward seeking restores the nearest checkpoint and simulates only the short remaining interval instead of starting from zero.
+
+When normal playback itself reaches the replay end, FasTris performs one additional cheap hash of the viewer's already-computed final state. No verification is repeated every frame.
+
+## What verification means
+
+`REPLAY VERIFIED` means the stored inputs deterministically reproduce the final state/hash recorded by the replay.
+
+SHA-256 is an integrity checksum, not a client authenticity signature. A modified client can create a modified replay and calculate a new hash. A competitive server must therefore validate the replay and independently re-simulate it, deriving score, time, lines, and other results itself instead of trusting client-provided result fields.

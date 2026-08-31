@@ -2,6 +2,7 @@
 #include "renderer.hpp"
 #include "fasttris/game.hpp"
 #include "fasttris/replay.hpp"
+#include "fasttris/seed.hpp"
 #include "fasttris/sha256.hpp"
 #include "fasttris/version.hpp"
 #define SDL_MAIN_USE_CALLBACKS 1
@@ -14,11 +15,13 @@
 #include <cstdint>
 #include <filesystem>
 #include <iostream>
+#include <iterator>
 #include <memory>
 #include <limits>
 #include <mutex>
 #include <optional>
 #include <random>
+#include <span>
 #include <string>
 #include <system_error>
 #include <utility>
@@ -133,21 +136,6 @@ struct SeedClipboardMailbox {
     std::optional<SeedClipboardResult> pending;
 };
 
-bool parseSeedText(std::string text,std::uint64_t& out) {
-    const auto first=text.find_first_not_of(" \t\r\n");
-    if(first==std::string::npos)return false;
-    const auto last=text.find_last_not_of(" \t\r\n");
-    text=text.substr(first,last-first+1);
-    if(text.empty()||!std::all_of(text.begin(),text.end(),[](unsigned char c){return c>='0'&&c<='9';}))return false;
-    try{
-        std::size_t used=0;
-        const auto value=std::stoull(text,&used,10);
-        if(used!=text.size())return false;
-        out=static_cast<std::uint64_t>(value);
-        return true;
-    }catch(...){return false;}
-}
-
 #if defined(__EMSCRIPTEN__)
 std::weak_ptr<ReplayDialogMailbox> g_web_replay_mailbox;
 std::weak_ptr<SeedClipboardMailbox> g_web_seed_clipboard_mailbox;
@@ -169,7 +157,7 @@ void postWebSeedClipboardResult(SeedClipboardResult result) {
 EM_JS(void, webChooseReplayFile, (), {
     const input = document.createElement('input');
     input.type = 'file';
-    input.accept = '.ftr,application/octet-stream,text/plain';
+    input.accept = '.ftr,application/octet-stream';
     input.style.display = 'none';
     let settled = false;
 
@@ -196,7 +184,7 @@ EM_JS(void, webChooseReplayFile, (), {
         settled = true;
         window.removeEventListener('focus', onWindowFocus);
 
-        if (file.size > 32 * 1024 * 1024) {
+        if (file.size > 16 * 1024 * 1024) {
             cleanup();
             Module.ccall('fastris_web_replay_error', null, ['string'], ['replay file is too large']);
             return;
@@ -204,15 +192,21 @@ EM_JS(void, webChooseReplayFile, (), {
 
         const reader = new FileReader();
         reader.onload = () => {
-            const text = typeof reader.result === 'string' ? reader.result : '';
+            const bytes = reader.result instanceof ArrayBuffer ? new Uint8Array(reader.result) : new Uint8Array();
             cleanup();
-            Module.ccall('fastris_web_replay_loaded', null, ['string'], [text]);
+            const ptr = Module._malloc(Math.max(1, bytes.length));
+            try {
+                if (bytes.length) HEAPU8.set(bytes, ptr);
+                Module.ccall('fastris_web_replay_loaded_bytes', null, ['number','number'], [ptr, bytes.length]);
+            } finally {
+                Module._free(ptr);
+            }
         };
         reader.onerror = () => {
             cleanup();
             Module.ccall('fastris_web_replay_error', null, ['string'], ['browser could not read replay file']);
         };
-        reader.readAsText(file);
+        reader.readAsArrayBuffer(file);
     });
 
     document.body.appendChild(input);
@@ -220,10 +214,10 @@ EM_JS(void, webChooseReplayFile, (), {
     input.click();
 });
 
-EM_JS(void, webDownloadReplayFile, (const char* filename, const char* contents), {
+EM_JS(void, webDownloadReplayFile, (const char* filename, const void* contents, int size), {
     const name = UTF8ToString(filename);
-    const text = UTF8ToString(contents);
-    const blob = new Blob([text], {type: 'application/octet-stream'});
+    const bytes = HEAPU8.slice(contents, contents + size);
+    const blob = new Blob([bytes], {type: 'application/octet-stream'});
     const url = URL.createObjectURL(blob);
     const anchor = document.createElement('a');
     anchor.href = url;
@@ -287,11 +281,10 @@ bool loadReplayWithSDL(const std::string& path,Replay& replay,std::string& err) 
     size_t size=0;
     void* raw=SDL_LoadFile_IO(io,&size,true);
     if(!raw){err=SDL_GetError();return false;}
-    constexpr size_t kMaxReplayBytes=32u*1024u*1024u;
     if(size>kMaxReplayBytes){SDL_free(raw);err="replay file is too large";return false;}
-    std::string text(static_cast<const char*>(raw),size);
+    const bool ok=deserializeReplay(std::string_view(static_cast<const char*>(raw),size),replay,&err);
     SDL_free(raw);
-    return deserializeReplay(text,replay,&err);
+    return ok;
 }
 
 bool saveReplayWithSDL(const Replay& replay,const std::string& path,std::string& err) {
@@ -316,39 +309,36 @@ struct ReplayViewer {
     double speed{1.0};
     Uint64 last_wall_ns{};
 
-    // Verification is intentionally split into two cheap, bounded phases:
-    // 1) an independent replay simulation started at load and advanced in small
-    //    slices across frames, and 2) a single hash comparison of the viewer's
-    //    actual state when playback reaches the end.
-    std::unique_ptr<Game> load_verify_game;
-    std::size_t load_verify_index{};
-    TimeUs load_verify_playhead{};
-    std::optional<bool> load_verification_result;
+    // One incremental pass performs load-time verification and builds seek /
+    // analysis indexes. Playback reuses those results instead of re-simulating
+    // work independently.
+    std::unique_ptr<ReplayIndexBuilder> index_builder;
+    std::vector<TimeUs> quick_piece_times;
     std::optional<bool> end_verification_result;
 
     bool load(const std::string& path, std::string& err) {
         if (!loadReplay(path, rep, &err)) return false;
-        resetVerification();
+        beginIndexing();
         reset(0);
         return true;
     }
 
     void load(Replay replay) {
         rep = std::move(replay);
-        resetVerification();
+        beginIndexing();
         reset(0);
     }
 
-    void resetVerification() {
-        load_verification_result.reset();
+    void beginIndexing() {
         end_verification_result.reset();
-        load_verify_index = 0;
-        load_verify_playhead = 0;
-        if (rep.final_hash.empty()) {
-            load_verify_game.reset();
-        } else {
-            load_verify_game = std::make_unique<Game>(rep.seed, rep.mode, rep.rules);
-        }
+        index_builder = std::make_unique<ReplayIndexBuilder>(rep);
+        quick_piece_times.clear();
+        quick_piece_times.reserve(rep.events.size()/4+1);
+        for(const auto& e:rep.events)if(e.down&&e.action==Action::HardDrop)quick_piece_times.push_back(e.time_us);
+    }
+
+    const ReplayIndex* replayIndex() const {
+        return index_builder ? &index_builder->index() : nullptr;
     }
 
     void reset(TimeUs target) {
@@ -359,115 +349,98 @@ struct ReplayViewer {
         last_wall_ns = SDL_GetTicksNS();
     }
 
+    const ReplayCheckpoint* bestCheckpoint(TimeUs target) const {
+        const auto* ri=replayIndex();
+        if(!ri||ri->checkpoints.empty())return nullptr;
+        const auto it=std::upper_bound(ri->checkpoints.begin(),ri->checkpoints.end(),target,
+            [](TimeUs t,const ReplayCheckpoint& cp){return t<cp.time_us;});
+        if(it==ri->checkpoints.begin())return nullptr;
+        return &*std::prev(it);
+    }
+
+    void restoreCheckpoint(const ReplayCheckpoint& cp) {
+        if(game)*game=cp.game;else game=std::make_unique<Game>(cp.game);
+        index=cp.event_index;
+        playhead=cp.time_us;
+    }
+
     void seek(TimeUs target) {
         target = std::clamp<TimeUs>(target, 0, rep.duration_us);
-        if (!game || target < playhead) {
-            game = std::make_unique<Game>(rep.seed, rep.mode, rep.rules);
-            index = 0;
-            playhead = 0;
+        if(!game){game=std::make_unique<Game>(rep.seed,rep.mode,rep.rules);index=0;playhead=0;}
+
+        const bool backward=target<playhead;
+        const bool long_forward=target>playhead+kReplayCheckpointIntervalUs*2;
+        if(backward||long_forward){
+            if(const auto* cp=bestCheckpoint(target);cp&&(backward||cp->time_us>playhead)){
+                restoreCheckpoint(*cp);
+            }else if(backward){
+                game=std::make_unique<Game>(rep.seed,rep.mode,rep.rules);
+                index=0;playhead=0;
+            }
         }
-        while (index < rep.events.size() && rep.events[index].time_us <= target) {
-            const auto& e = rep.events[index];
+
+        while(index<rep.events.size()&&rep.events[index].time_us<=target){
+            const auto& e=rep.events[index];
             game->advanceTo(e.time_us);
-            if (e.down) game->press(e.action);
-            else game->release(e.action);
+            if(e.down)game->press(e.action);else game->release(e.action);
             ++index;
         }
         game->advanceTo(target);
-        playhead = target;
+        playhead=target;
     }
 
     void stepLoadVerification() {
-        if (!load_verify_game || load_verification_result.has_value()) return;
-
-        // Keep browser/main-thread verification bounded. Even a long replay is
-        // verified over multiple frames instead of blocking the UI on load.
-        constexpr Uint64 kWallBudgetNs = 1500000;  // ~1.5 ms per frame max
-        constexpr TimeUs kSimChunkUs = 2000000;    // at most 2 s simulation per step
-        const Uint64 deadline = SDL_GetTicksNS() + kWallBudgetNs;
-
-        while (SDL_GetTicksNS() < deadline) {
-            if (load_verify_index < rep.events.size()) {
-                const auto& e = rep.events[load_verify_index];
-                const TimeUs target = std::min(e.time_us, load_verify_playhead + kSimChunkUs);
-                load_verify_game->advanceTo(target);
-                load_verify_playhead = target;
-                if (load_verify_playhead < e.time_us) continue;
-
-                // Preserve exact ordering for multiple events at one timestamp.
-                while (load_verify_index < rep.events.size() &&
-                       rep.events[load_verify_index].time_us == load_verify_playhead) {
-                    const auto& at = rep.events[load_verify_index];
-                    if (at.down) load_verify_game->press(at.action);
-                    else load_verify_game->release(at.action);
-                    ++load_verify_index;
-                    if (SDL_GetTicksNS() >= deadline) break;
-                }
-                continue;
-            }
-
-            if (load_verify_playhead < rep.duration_us) {
-                const TimeUs target = std::min(rep.duration_us, load_verify_playhead + kSimChunkUs);
-                load_verify_game->advanceTo(target);
-                load_verify_playhead = target;
-                continue;
-            }
-
-            load_verification_result = stateHash(*load_verify_game) == rep.final_hash;
-            load_verify_game.reset();
-            break;
+        if(!index_builder||index_builder->finished())return;
+        constexpr Uint64 kWallBudgetNs=1500000; // ~1.5 ms per frame.
+        const Uint64 deadline=SDL_GetTicksNS()+kWallBudgetNs;
+        while(SDL_GetTicksNS()<deadline&&!index_builder->finished()){
+            if(!index_builder->step())break;
         }
     }
 
     void verifyEndStateIfNeeded() {
-        if (!paused || playhead < rep.duration_us || end_verification_result.has_value()) return;
-        if (rep.final_hash.empty()) return;
-        end_verification_result = stateHash(*game) == rep.final_hash;
+        if(playhead<rep.duration_us||end_verification_result.has_value()||rep.final_hash.empty())return;
+        end_verification_result=stateHash(*game)==rep.final_hash;
     }
 
     std::optional<bool> visibleVerificationResult() const {
-        // Any failed check wins. Otherwise prefer the end-of-playback check,
-        // then the independent load-time verification if it has finished.
-        if ((load_verification_result.has_value() && !*load_verification_result) ||
-            (end_verification_result.has_value() && !*end_verification_result)) {
-            return false;
-        }
-        if (end_verification_result.has_value()) return end_verification_result;
-        if (load_verification_result.has_value()) return load_verification_result;
+        const auto load_result=(index_builder?index_builder->index().verification:std::optional<bool>{});
+        if((load_result.has_value()&&!*load_result)||(end_verification_result.has_value()&&!*end_verification_result))return false;
+        if(end_verification_result.has_value())return end_verification_result;
+        if(load_result.has_value())return load_result;
         return std::nullopt;
     }
 
     void tick(Uint64 now) {
         stepLoadVerification();
-        if (last_wall_ns == 0) last_wall_ns = now;
-        if (!paused) {
-            const auto delta = now - last_wall_ns;
-            const auto add = static_cast<TimeUs>((delta / 1000.0) * speed);
-            seek(std::min(rep.duration_us, playhead + add));
-            if (playhead >= rep.duration_us) paused = true;
+        if(last_wall_ns==0)last_wall_ns=now;
+        if(!paused){
+            const auto delta=now-last_wall_ns;
+            const auto add=static_cast<TimeUs>((delta/1000.0)*speed);
+            seek(std::min(rep.duration_us,playhead+add));
+            if(playhead>=rep.duration_us)paused=true;
         }
         verifyEndStateIfNeeded();
-        last_wall_ns = now;
+        last_wall_ns=now;
     }
 
-    std::vector<ReplayEvent> recent() const {
-        std::vector<ReplayEvent> out;
-        std::size_t i = index;
-        while (i > 0 && out.size() < 8) {
-            --i;
-            out.push_back(rep.events[i]);
-        }
-        std::reverse(out.begin(), out.end());
-        return out;
+    std::span<const ReplayEvent> recent() const {
+        const std::size_t end=std::min(index,rep.events.size());
+        const std::size_t begin=end>8?end-8:0;
+        return std::span<const ReplayEvent>(rep.events.data()+begin,end-begin);
     }
 
     void nextPiece() {
-        for (std::size_t i = index; i < rep.events.size(); ++i) {
-            if (rep.events[i].down && rep.events[i].action == Action::HardDrop) {
-                seek(rep.events[i].time_us);
-                return;
-            }
+        if(const auto* ri=replayIndex();ri&&!ri->pieces.empty()){
+            const auto it=std::upper_bound(ri->pieces.begin(),ri->pieces.end(),playhead,
+                [](TimeUs t,const ReplayMarker& marker){return t<marker.time_us;});
+            if(it!=ri->pieces.end()){seek(it->time_us);return;}
+            if(index_builder&&index_builder->finished()){seek(rep.duration_us);return;}
         }
+        // Before the simulation-derived piece index finishes, use the tiny
+        // hard-drop navigation index built once at load. No per-key linear scan.
+        const auto quick=std::upper_bound(quick_piece_times.begin(),quick_piece_times.end(),playhead);
+        if(quick!=quick_piece_times.end()){seek(*quick);return;}
         seek(rep.duration_us);
     }
 };
@@ -654,9 +627,13 @@ struct AppState {
             return;
         }
 #if defined(__EMSCRIPTEN__)
-        const std::string text=serializeReplay(replay);
+        const std::string bytes=serializeReplay(replay);
+        if(bytes.empty()){
+            if(from_game)run.status="REPLAY ENCODE FAILED";else replay_status="REPLAY ENCODE FAILED";
+            return;
+        }
         const std::string filename="FasTris-Replay-"+std::to_string(replay.seed)+".ftr";
-        webDownloadReplayFile(filename.c_str(),text.c_str());
+        webDownloadReplayFile(filename.c_str(),bytes.data(),static_cast<int>(bytes.size()));
         if(from_game)run.status="REPLAY DOWNLOAD STARTED";
         else replay_status="REPLAY DOWNLOAD STARTED";
         (void)now;
@@ -737,7 +714,7 @@ struct AppState {
             return;
         }
         std::uint64_t value=0;
-        if(!parseSeedText(result->text,value)){
+        if(!firstSeedInText(result->text,value)){
             seed_status="CLIPBOARD DOES NOT CONTAIN A VALID UINT64 SEED";
             return;
         }
@@ -768,7 +745,7 @@ struct AppState {
         std::string text(raw);
         SDL_free(raw);
         std::uint64_t value=0;
-        if(!parseSeedText(text,value)){
+        if(!firstSeedInText(text,value)){
             seed_status="CLIPBOARD DOES NOT CONTAIN A VALID UINT64 SEED";
             return;
         }
@@ -890,7 +867,7 @@ struct AppState {
 
     bool applySeedNumberEdit() {
         std::uint64_t value=0;
-        if(!parseSeedText(seed_number_text,value)){
+        if(!firstSeedInText(seed_number_text,value)){
             seed_status="INVALID UINT64 SEED";
             return false;
         }
@@ -1525,7 +1502,7 @@ struct AppState {
             info.seed = seed;
             info.paused = run.paused;
             info.status = run.status;
-            info.recent_inputs = run.recent;
+            info.recent_inputs = std::span<const ReplayEvent>(run.recent);
             info.show_inputs = cfg.show_inputs;
             renderGame(ren, *run.game, info);
         } else if (screen == Screen::Replay && viewer.game) {
@@ -1591,10 +1568,10 @@ struct AppState {
 } // namespace
 
 #if defined(__EMSCRIPTEN__)
-extern "C" EMSCRIPTEN_KEEPALIVE void fastris_web_replay_loaded(const char* text) {
+extern "C" EMSCRIPTEN_KEEPALIVE void fastris_web_replay_loaded_bytes(const unsigned char* data, int size) {
     ReplayDialogResult result;
     result.action=ReplayDialogAction::Load;
-    if(text) result.contents=std::string(text);
+    if(data&&size>=0) result.contents=std::string(reinterpret_cast<const char*>(data),static_cast<std::size_t>(size));
     else result.error="browser returned an empty replay";
     postWebReplayResult(std::move(result));
 }

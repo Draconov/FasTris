@@ -11,10 +11,13 @@ FasTris already separates deterministic simulation from presentation. A producti
 5. Clients may predict locally for zero-feeling input latency.
 6. Periodic state hashes detect desyncs.
 7. Final replay/input logs are retained for moderation and leaderboard verification.
+8. Leaderboard/tournament services re-simulate submitted replays and derive the claimed result server-side.
 
 ## Do not trust
 
-A ranked backend should never trust a client-provided score/time/APM alone. Re-simulate the submitted input log or compare it with the server-authoritative state.
+A ranked backend should never trust a client-provided score/time/APM alone. It should validate replay bounds/rules, re-simulate the submitted input log, and calculate the result itself.
+
+The replay SHA-256 is an integrity/desync checksum, not an anti-cheat signature. A modified client can calculate a new hash for modified data, so hash equality alone must never authorize a leaderboard result.
 
 ## Same-seed races
 

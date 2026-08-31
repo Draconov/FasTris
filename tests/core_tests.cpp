@@ -4,6 +4,7 @@
 #include "fasttris/game.hpp"
 #include "fasttris/replay.hpp"
 #include "fasttris/scoring.hpp"
+#include "fasttris/seed.hpp"
 #include "fasttris/sha256.hpp"
 #include "fasttris/tetromino.hpp"
 #include <algorithm>
@@ -19,6 +20,16 @@
 
 using namespace fasttris;
 
+
+static void test_seed_text_scanning() {
+    std::uint64_t value=0;
+    assert(firstSeedInText("seed: 4956273544639070971",value));
+    assert(value==4956273544639070971ULL);
+    assert(firstSeedInText("bad 18446744073709551616 then 42",value)); // first overflows; second wins.
+    assert(value==42);
+    assert(firstSeedInText("a=7 b=99",value)&&value==7);
+    assert(!firstSeedInText("no decimal seed here",value));
+}
 static void test_rng_and_bag() {
     Bag7 a(123456), b(123456), c(654321);
     std::vector<Piece> av,bv,cv;
@@ -60,23 +71,104 @@ static void test_replay() {
     assert(verifyReplay(r));
     std::string err;
     const std::string encoded=serializeReplay(r);
-    assert(encoded.find("FASTTRIS_REPLAY 1\n")!=std::string::npos);
+    assert(!encoded.empty());
+    assert(encoded.size()<160); // compact binary metadata + delta-coded events + raw hash.
+    assert(encoded.size()>=8);
+    assert(encoded.substr(0,7)=="FASTRIS");
     Replay memory_copy;
     assert(deserializeReplay(encoded,memory_copy,&err));
     assert(verifyReplay(memory_copy));
-    assert(memory_copy.events.size()==r.events.size());
+    assert(memory_copy.events==r.events);
+    assert(memory_copy.seed==r.seed);
+    assert(memory_copy.final_hash==r.final_hash);
 
     auto path=(std::filesystem::temp_directory_path()/"fasttris_test.ftr").string();
     assert(saveReplay(r,path,&err));
     {
-        std::ifstream saved(path,std::ios::binary);
-        std::string text((std::istreambuf_iterator<char>(saved)),std::istreambuf_iterator<char>());
-        assert(text.find("FASTTRIS_REPLAY 1\n")!=std::string::npos);
-        assert(text.find("seed 778899\n")!=std::string::npos);
+        std::ifstream saved(path,std::ios::binary|std::ios::ate);
+        assert(saved.tellg()==static_cast<std::streamoff>(encoded.size()));
     }
     Replay x;assert(loadReplay(path,x,&err));assert(verifyReplay(x));std::filesystem::remove(path);
+
+    // Current-format-only policy: old textual replay data is rejected.
+    Replay old;
+    assert(!deserializeReplay("FASTTRIS_REPLAY 1\nseed 1\n",old,&err));
 }
-static void test_sha() { assert(sha256("abc")=="ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"); }
+
+static void test_replay_validation_and_bounds() {
+    Replay r;
+    r.seed=9;
+    r.mode=Mode::Zen;
+    r.duration_us=10000;
+    r.events={{9000,Action::Left,true},{8000,Action::Left,false}};
+    Game g(r.seed,r.mode,r.rules);g.advanceTo(r.duration_us);r.final_hash=stateHash(g);
+    std::string err;
+    assert(!validateReplay(r,&err));
+    assert(serializeReplay(r).empty());
+
+    r.events={{1000,Action::Left,true}};
+    r.duration_us=kMaxReplayDurationUs+1;
+    assert(!validateReplay(r,&err));
+
+    r.duration_us=10000;
+    Game valid_game(r.seed,r.mode,r.rules);
+    valid_game.advanceTo(1000);valid_game.press(Action::Left);valid_game.advanceTo(r.duration_us);
+    r.final_hash=stateHash(valid_game);
+    auto encoded=serializeReplay(r);
+    assert(!encoded.empty());
+    encoded.push_back('x');
+    Replay trailing;
+    assert(!deserializeReplay(encoded,trailing,&err));
+}
+
+static void test_replay_index_and_checkpoints() {
+    Replay r;
+    r.seed=1234567;
+    r.mode=Mode::Zen;
+    for(int sec=1;sec<=18;++sec){
+        const TimeUs t=sec*1000000LL;
+        r.events.push_back({t,Action::HardDrop,true});
+    }
+    r.duration_us=20000000;
+    Game g(r.seed,r.mode,r.rules);
+    for(const auto&e:r.events){g.advanceTo(e.time_us);g.press(e.action);}
+    g.advanceTo(r.duration_us);
+    r.final_hash=stateHash(g);
+
+    ReplayIndexBuilder builder(r);
+    int guard=0;
+    while(!builder.finished()&&guard++<100000)assert(builder.step());
+    assert(builder.finished());
+    const auto& idx=builder.index();
+    assert(idx.verification.has_value()&&*idx.verification);
+    assert(idx.checkpoints.size()>=5);
+    assert(idx.checkpoints.front().time_us==0);
+    assert(idx.checkpoints.back().time_us==r.duration_us);
+    assert(std::any_of(idx.checkpoints.begin(),idx.checkpoints.end(),[](const ReplayCheckpoint& cp){return cp.time_us==5000000;}));
+    assert(std::any_of(idx.checkpoints.begin(),idx.checkpoints.end(),[](const ReplayCheckpoint& cp){return cp.time_us==10000000;}));
+    assert(!idx.pieces.empty());
+
+    // Restore a 10-second snapshot and reproduce only the short tail to 12 s.
+    auto it=std::find_if(idx.checkpoints.begin(),idx.checkpoints.end(),[](const ReplayCheckpoint& cp){return cp.time_us==10000000;});
+    assert(it!=idx.checkpoints.end());
+    Game from_checkpoint=it->game;
+    std::size_t event=it->event_index;
+    constexpr TimeUs target=12000000;
+    while(event<r.events.size()&&r.events[event].time_us<=target){
+        from_checkpoint.advanceTo(r.events[event].time_us);from_checkpoint.press(r.events[event].action);++event;
+    }
+    from_checkpoint.advanceTo(target);
+
+    Game from_start(r.seed,r.mode,r.rules);
+    for(const auto&e:r.events){if(e.time_us>target)break;from_start.advanceTo(e.time_us);from_start.press(e.action);}from_start.advanceTo(target);
+    assert(stateHash(from_checkpoint)==stateHash(from_start));
+}
+
+static void test_sha() {
+    const std::string expected="ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad";
+    assert(sha256("abc")==expected);
+    Sha256 streaming;streaming.update("a");streaming.update("b");streaming.update("c");assert(streaming.finalHex()==expected);
+}
 
 static void test_irs_ihs() {
     Rules r;
@@ -294,6 +386,6 @@ static void test_battle_smoke() {
 }
 
 int main(){
-    test_rng_and_bag();test_shapes();test_board();test_game_determinism();test_seed_difference();test_replay();test_sha();test_irs_ihs();test_replay_fuzz();test_default_horizontal_handling();test_zero_arr_remains_expert_instant_shift();test_zero_arr_preserves_charge_across_spawn();test_modern_scoring();test_finesse_tracking();test_custom_mode_rules();test_mode_basics();test_replay_parser_requires_current_layout();test_battle_smoke();
+    test_seed_text_scanning();test_rng_and_bag();test_shapes();test_board();test_game_determinism();test_seed_difference();test_replay();test_replay_validation_and_bounds();test_replay_index_and_checkpoints();test_sha();test_irs_ihs();test_replay_fuzz();test_default_horizontal_handling();test_zero_arr_remains_expert_instant_shift();test_zero_arr_preserves_charge_across_spawn();test_modern_scoring();test_finesse_tracking();test_custom_mode_rules();test_mode_basics();test_replay_parser_requires_current_layout();test_battle_smoke();
     std::cout<<"FasTris core tests: PASS\n";
 }
