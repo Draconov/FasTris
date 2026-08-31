@@ -67,7 +67,7 @@ Visual palettes are available under **Settings -> Miscellaneous -> Palettes** an
 Presentation shaders are available under **Settings -> Miscellaneous -> Shaders**. Each shader exposes only its relevant controls. The post-processing path renders image-dependent effects from an offscreen frame texture: CRT curvature warps the actual frame, bloom derives from the rendered image, chromatic separation offsets real RGB channels, analog distortion displaces horizontal image strips, and temporal shaders retain prior-frame history.
 Procedural block textures are available under **Settings -> Miscellaneous -> Textures**. Texture controls are dynamic, apply immediately, and include options such as cell gap, bevel depth, highlights, borders, reflection, pattern scale, dots, stripes, grid geometry, and transparency depending on the selected texture. Textures are generated from lightweight SDL primitives with no image assets or runtime decoding.
 
-Palettes, textures, and shaders are presentation-only and never affect gameplay, replay data, deterministic hashes, seeds, or verification.
+Palettes, textures, and shaders are presentation-only and never affect gameplay, replay data, deterministic hashes, seeds, or verification. **Settings -> Miscellaneous -> Reset Graphics** restores every palette, texture, shader, and shader/texture parameter without touching controls, handling, FPS/VSYNC, seeds, or gameplay rules.
 
 ## Seeds and deterministic runs
 
@@ -91,7 +91,7 @@ FasTris --daily 2026-08-30 --mode seedrace
 
 ## Replays
 
-Completed runs are stored as deterministic replay data rather than video. A replay contains the seed, rules, handling, timestamped inputs, duration, and final state hash.
+Completed runs are stored as deterministic replay data rather than video. A replay contains the seed, rules, handling, timestamped inputs, duration, and final state hash. Finite-goal modes, including Sandbox/custom line goals and time limits, finalize recording at the exact terminal simulation time so the completed replay can always be saved or downloaded.
 
 Verify one independently:
 

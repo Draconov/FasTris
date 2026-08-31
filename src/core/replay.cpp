@@ -165,6 +165,15 @@ Sha256Digest stateHash(const Game& g){
     return h.finalBytes();
 }
 
+void finalizeReplay(Replay& replay,const Game& game){
+    replay.duration_us=game.now();
+    const auto first_invalid=std::upper_bound(
+        replay.events.begin(),replay.events.end(),replay.duration_us,
+        [](TimeUs t,const ReplayEvent& event){return t<event.time_us;});
+    replay.events.erase(first_invalid,replay.events.end());
+    replay.final_hash=stateHash(game);
+}
+
 bool validateReplay(const Replay& r,std::string* err){
     if(static_cast<std::uint8_t>(r.mode)>static_cast<std::uint8_t>(Mode::Custom)){setError(err,"invalid mode");return false;}
     if(!validRules(r.rules)){setError(err,"replay rules are out of range");return false;}

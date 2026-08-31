@@ -1319,26 +1319,30 @@ void renderControls(SDL_Renderer*r,const AppConfig&c,int sel,bool rebinding,bool
     }
 }
 
-void renderMiscellaneous(SDL_Renderer*r,const AppConfig&cfg,int sel){
+void renderMiscellaneous(SDL_Renderer*r,const AppConfig&cfg,int sel,const std::string&status){
     beginCanvas(r,true);
     set(r,{11,14,20,255});SDL_RenderClear(r);
-    txt(r,300,70,"MISCELLANEOUS",{235,240,248,255},true);
-    txt(r,265,155,"GRAPHICS",{145,155,170,255},true);
+    txt(r,300,48,"MISCELLANEOUS",{235,240,248,255},true);
+    txt(r,265,125,"GRAPHICS",{145,155,170,255},true);
 
-    const std::array<std::string,kMiscItemCount> items={"SHADERS","TEXTURES","PALETTES"};
+    const std::array<std::string,kMiscItemCount> items={"SHADERS","TEXTURES","PALETTES","RESET GRAPHICS"};
     for(int n=0;n<kMiscItemCount;++n){
-        txt(r,265,220+n*70,(n==sel?"> ":"  ")+items[n],n==sel?C{120,220,255,255}:C{210,215,225,255},true);
-        if(n==kMiscShadersIndex)txt(r,500,224+n*70,shaderName(cfg.shader),{155,205,220,255});
-        else if(n==kMiscTexturesIndex)txt(r,500,224+n*70,textureName(cfg.texture),{155,205,220,255});
-        else txt(r,500,224+n*70,paletteName(cfg.palette),{155,205,220,255});
+        const float y=180.0f+n*64.0f;
+        const C normal=n==kMiscResetGraphicsIndex?C{245,180,110,255}:C{210,215,225,255};
+        txt(r,265,y,(n==sel?"> ":"  ")+items[n],n==sel?C{120,220,255,255}:normal,true);
+        if(n==kMiscShadersIndex)txt(r,500,y+4,shaderName(cfg.shader),{155,205,220,255});
+        else if(n==kMiscTexturesIndex)txt(r,500,y+4,textureName(cfg.texture),{155,205,220,255});
+        else if(n==kMiscPalettesIndex)txt(r,500,y+4,paletteName(cfg.palette),{155,205,220,255});
     }
 
-    txt(r,265,470,"Shaders, textures and palettes are renderer-only presentation settings.",{155,168,185,255});
-    txt(r,265,500,"Procedural textures use SDL primitives only: no image assets or decoding.",{155,168,185,255});
-    if(sel==kMiscShadersIndex)txt(r,265,550,"ENTER open shader settings",{150,205,220,255},true);
-    else if(sel==kMiscTexturesIndex)txt(r,265,550,"ENTER open procedural texture settings",{150,205,220,255},true);
-    else txt(r,265,550,"ENTER open palette settings",{150,205,220,255},true);
-    txt(r,265,620,"UP/DOWN select   ENTER open   ESC back to Settings",{135,145,160,255});
+    txt(r,265,455,"Reset Graphics restores every shader, texture and palette parameter.",{155,168,185,255});
+    txt(r,265,483,"It does not change controls, handling, FPS, VSYNC, seeds or gameplay rules.",{155,168,185,255});
+    if(sel==kMiscShadersIndex)txt(r,265,535,"ENTER open shader settings",{150,205,220,255},true);
+    else if(sel==kMiscTexturesIndex)txt(r,265,535,"ENTER open procedural texture settings",{150,205,220,255},true);
+    else if(sel==kMiscPalettesIndex)txt(r,265,535,"ENTER open palette settings",{150,205,220,255},true);
+    else txt(r,265,535,"ENTER restore all graphics presentation defaults",{245,180,110,255},true);
+    if(!status.empty())txt(r,265,575,status,{255,205,100,255},true);
+    txt(r,265,625,"UP/DOWN select   ENTER open/apply   ESC back to Settings",{135,145,160,255});
 }
 
 void renderPaletteSettings(SDL_Renderer*r,const AppConfig&cfg,int sel){

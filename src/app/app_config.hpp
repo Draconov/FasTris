@@ -195,6 +195,7 @@ AppConfig defaultConfig();
 bool loadConfig(const std::string& path, AppConfig& cfg);
 bool saveConfig(const std::string& path, const AppConfig& cfg);
 void resetSettings(AppConfig& cfg);
+void resetGraphics(AppConfig& cfg);
 void resetControls(AppConfig& cfg);
 const char* padName(int button);
 } // namespace fasttris::app

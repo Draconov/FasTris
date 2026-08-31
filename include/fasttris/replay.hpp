@@ -121,6 +121,7 @@ private:
 };
 
 Sha256Digest stateHash(const Game& game);
+void finalizeReplay(Replay& replay, const Game& game);
 bool validateReplay(const Replay& replay, std::string* error=nullptr);
 
 // Current .ftr format is compact binary. std::string is used as an owning byte

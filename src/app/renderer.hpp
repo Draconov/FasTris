@@ -56,7 +56,8 @@ inline constexpr int kControlItemCount = kControlResetIndex + 1;
 inline constexpr int kMiscShadersIndex = 0;
 inline constexpr int kMiscTexturesIndex = 1;
 inline constexpr int kMiscPalettesIndex = 2;
-inline constexpr int kMiscItemCount = 3;
+inline constexpr int kMiscResetGraphicsIndex = 3;
+inline constexpr int kMiscItemCount = 4;
 
 void setVisualPalette(VisualPalette palette);
 void setVisualTexture(const AppConfig& cfg);
@@ -74,7 +75,7 @@ void renderSeedSettings(SDL_Renderer* r, std::uint64_t seed, int selected,
                         bool numeric_editing, const std::string& numeric_text, const std::string& status);
 void renderSandboxSetup(SDL_Renderer* r, const AppConfig& cfg, int selected);
 void renderControls(SDL_Renderer* r, const AppConfig& cfg, int selected, bool rebinding, bool waiting_pad);
-void renderMiscellaneous(SDL_Renderer* r, const AppConfig& cfg, int selected);
+void renderMiscellaneous(SDL_Renderer* r, const AppConfig& cfg, int selected, const std::string& status);
 void renderPaletteSettings(SDL_Renderer* r, const AppConfig& cfg, int selected);
 void renderTextureSettings(SDL_Renderer* r, const AppConfig& cfg, int selected);
 void renderShaderSettings(SDL_Renderer* r, const AppConfig& cfg, int selected);

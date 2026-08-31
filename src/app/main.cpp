@@ -524,7 +524,9 @@ struct RunSession {
     }
 
     void advance(Uint64 ns) {
-        if (game && !paused) { game->advanceTo(simAt(ns)); replay.final_hash.reset(); }
+        if (!game || paused || game->gameOver() || game->complete()) return;
+        game->advanceTo(simAt(ns));
+        replay.final_hash.reset();
     }
 
     void togglePause(Uint64 ns) {
@@ -548,17 +550,23 @@ struct RunSession {
     }
 
     void input(Uint64 ns, Action action, bool down) {
-        if (!game || paused) return;
+        if (!game || paused || game->gameOver() || game->complete()) return;
         status.clear();
         const auto t = simAt(ns);
         game->advanceTo(t);
+        // A timed/automatic goal can complete while advancing to this input's
+        // timestamp. In that case the input never reached gameplay and must not
+        // be written after the terminal replay time.
+        if (game->gameOver() || game->complete()) return;
         if (down) game->press(action);
         else game->release(action);
+        // Keep the action that actually caused completion/top-out. Only later
+        // inputs are rejected by the early terminal-state guard above.
         record(t, action, down);
     }
 
     const Replay& prepareReplay() {
-        if(game){replay.duration_us=game->now();replay.final_hash=stateHash(*game);}
+        if(game)finalizeReplay(replay,*game);
         return replay;
     }
 
@@ -681,6 +689,12 @@ struct AppState {
             return;
         }
 #if defined(__EMSCRIPTEN__)
+        std::string encode_error;
+        if(!validateReplay(replay,&encode_error)){
+            const std::string message="REPLAY ENCODE FAILED: "+encode_error;
+            if(from_game)run.status=message;else replay_status=message;
+            return;
+        }
         const std::string bytes=serializeReplay(replay);
         if(bytes.empty()){
             if(from_game)run.status="REPLAY ENCODE FAILED";else replay_status="REPLAY ENCODE FAILED";
@@ -1519,14 +1533,22 @@ struct AppState {
                 }else if(key==SDLK_DOWN){
                     misc_sel=(misc_sel+1)%kMiscItemCount;
                 }else if((key==SDLK_RETURN||key==SDLK_KP_ENTER)&&misc_sel==kMiscShadersIndex){
+                    settings_status.clear();
                     shader_sel=0;
                     screen=Screen::Shaders;
                 }else if((key==SDLK_RETURN||key==SDLK_KP_ENTER)&&misc_sel==kMiscTexturesIndex){
+                    settings_status.clear();
                     texture_sel=0;
                     screen=Screen::Textures;
                 }else if((key==SDLK_RETURN||key==SDLK_KP_ENTER)&&misc_sel==kMiscPalettesIndex){
+                    settings_status.clear();
                     palette_sel=static_cast<int>(cfg.palette);
                     screen=Screen::Palettes;
+                }else if((key==SDLK_RETURN||key==SDLK_KP_ENTER)&&misc_sel==kMiscResetGraphicsIndex){
+                    resetGraphics(cfg);
+                    shutdownVisualShaderPipeline();
+                    saveConfig(config_path,cfg);
+                    settings_status="GRAPHICS RESET";
                 }
             }
             return SDL_APP_CONTINUE;
@@ -1773,7 +1795,7 @@ struct AppState {
         } else if (screen == Screen::Controls) {
             renderControls(ren, cfg, controls_sel, rebinding, wait_pad);
         } else if (screen == Screen::Miscellaneous) {
-            renderMiscellaneous(ren, cfg, misc_sel);
+            renderMiscellaneous(ren, cfg, misc_sel, settings_status);
         } else if (screen == Screen::Shaders) {
             renderShaderSettings(ren, cfg, shader_sel);
         } else if (screen == Screen::Textures) {

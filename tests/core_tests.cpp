@@ -121,6 +121,34 @@ static void test_replay_validation_and_bounds() {
     assert(!deserializeReplay(encoded,trailing,&err));
 }
 
+
+static void test_replay_finalize_trims_post_finish_tail() {
+    Rules rules;
+    rules.custom_gravity_ms=0;
+    Game game(20260831,Mode::Custom,rules);
+    game.advanceTo(2500000);
+
+    Replay replay;
+    replay.seed=20260831;
+    replay.mode=Mode::Custom;
+    replay.rules=rules;
+    replay.events={
+        {1000000,Action::Left,true},
+        {1500000,Action::Left,false},
+        // Models the stale key-up/key-down tail that used to be recorded after
+        // a finite goal froze Game::now().
+        {3000000,Action::Right,true},
+        {3100000,Action::Right,false}
+    };
+
+    finalizeReplay(replay,game);
+    assert(replay.duration_us==2500000);
+    assert(replay.events.size()==2);
+    assert(replay.final_hash.has_value());
+    assert(validateReplay(replay));
+    assert(!serializeReplay(replay).empty());
+}
+
 static void test_replay_index_and_checkpoints() {
     Replay r;
     r.seed=1234567;
@@ -499,6 +527,6 @@ static void test_battle_smoke() {
 }
 
 int main(){
-    test_seed_text_scanning();test_rng_and_bag();test_shapes();test_board();test_game_determinism();test_seed_difference();test_replay();test_replay_validation_and_bounds();test_replay_index_and_checkpoints();test_sha();test_irs_ihs();test_replay_fuzz();test_default_horizontal_handling();test_zero_arr_remains_expert_instant_shift();test_zero_arr_preserves_charge_across_spawn();test_modern_scoring();test_finesse_tracking();test_custom_mode_rules();test_mode_basics();test_replay_parser_requires_current_layout();test_replay_incremental_decoder_and_action_filter();test_exact_semantic_events_and_replay_markers();test_adaptive_checkpoint_bound();test_battle_smoke();
+    test_seed_text_scanning();test_rng_and_bag();test_shapes();test_board();test_game_determinism();test_seed_difference();test_replay();test_replay_validation_and_bounds();test_replay_finalize_trims_post_finish_tail();test_replay_index_and_checkpoints();test_sha();test_irs_ihs();test_replay_fuzz();test_default_horizontal_handling();test_zero_arr_remains_expert_instant_shift();test_zero_arr_preserves_charge_across_spawn();test_modern_scoring();test_finesse_tracking();test_custom_mode_rules();test_mode_basics();test_replay_parser_requires_current_layout();test_replay_incremental_decoder_and_action_filter();test_exact_semantic_events_and_replay_markers();test_adaptive_checkpoint_bound();test_battle_smoke();
     std::cout<<"FasTris core tests: PASS\n";
 }

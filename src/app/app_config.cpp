@@ -712,12 +712,8 @@ bool saveConfig(const std::string&path,const AppConfig&c){
     return bool(f);
 }
 
-void resetSettings(AppConfig& c){
+void resetGraphics(AppConfig& c){
     const AppConfig d=defaultConfig();
-    c.rules=d.rules;
-    c.vsync=d.vsync;
-    c.show_inputs=d.show_inputs;
-    c.fps_cap=d.fps_cap;
     c.palette=d.palette;
     c.texture=d.texture;
     c.texture_cell_gap=d.texture_cell_gap;
@@ -765,6 +761,15 @@ void resetSettings(AppConfig& c){
     c.shader_direction=d.shader_direction;
     c.shader_line_thickness=d.shader_line_thickness;
     c.shader_bloom=d.shader_bloom;
+}
+
+void resetSettings(AppConfig& c){
+    const AppConfig d=defaultConfig();
+    c.rules=d.rules;
+    c.vsync=d.vsync;
+    c.show_inputs=d.show_inputs;
+    c.fps_cap=d.fps_cap;
+    resetGraphics(c);
 }
 
 void resetControls(AppConfig& c){
