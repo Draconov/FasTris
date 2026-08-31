@@ -80,6 +80,35 @@ ShaderRuntime g_shader{};
 std::array<ShaderRuntime,kShaderSlotCount> g_shader_stack{};
 std::size_t g_active_shader_slot{};
 
+// Gameplay Ghosting tracks the active tetromino itself instead of repeatedly
+// blending whole screen frames. Static board/background pixels therefore can
+// no longer paint over a previous piece position and make the trail vanish.
+struct PieceMotionStamp {
+    Piece piece{Piece::None};
+    Rotation rotation{Rotation::Spawn};
+    int x{};
+    int y{};
+    int locked_pieces{};
+};
+struct PieceGhostSample {
+    std::array<SDL_FRect,4> blocks{};
+    int block_count{};
+    C color{};
+    Uint64 captured_ms{};
+    Uint64 serial{};
+};
+constexpr std::size_t kPieceGhostSampleCount=32;
+std::array<PieceGhostSample,kPieceGhostSampleCount> g_piece_ghost_samples{};
+std::size_t g_piece_ghost_head{};
+std::size_t g_piece_ghost_count{};
+PieceMotionStamp g_last_piece_motion{};
+bool g_last_piece_motion_valid{};
+bool g_game_frame_seen{};
+Uint64 g_piece_motion_serial{};
+Uint64 g_last_game_elapsed_us{};
+int g_piece_ghost_output_w{};
+int g_piece_ghost_output_h{};
+
 constexpr int kWarpCols=32;
 constexpr int kWarpRows=24;
 constexpr int kWarpVertexCount=(kWarpCols+1)*(kWarpRows+1);
@@ -484,6 +513,58 @@ void drawTexturedCell(SDL_Renderer*r,float x,float y,float size,C base){
 
 void drawMini(SDL_Renderer*r,Piece p,float ox,float oy,float s){if(p==Piece::None)return;auto bs=blocks(p,Rotation::Spawn);int minx=4,maxx=0,miny=4,maxy=0;for(auto b:bs){minx=std::min(minx,b.x);maxx=std::max(maxx,b.x);miny=std::min(miny,b.y);maxy=std::max(maxy,b.y);}float cx=ox-(minx+maxx+1)*s/2.0f,cy=oy-(miny+maxy+1)*s/2.0f;for(auto b:bs)drawTexturedCell(r,cx+b.x*s,cy+b.y*s,s,color(p));}
 void actionLabel(SDL_Renderer*r,float x,float y,const ReplayEvent&e){std::string s=std::string(e.down?"+":"-")+std::string(actionName(e.action));txt(r,x,y,s,{150,160,175,255});}
+
+void clearPieceGhostSamples(){
+    for(auto& sample:g_piece_ghost_samples)sample=PieceGhostSample{};
+    g_piece_ghost_head=0;
+    g_piece_ghost_count=0;
+}
+
+void capturePieceGhostSample(Game& g,float bx,float by,float cell,float render_scale,int output_w,int output_h){
+    const auto& active=g.active();
+    const auto& stats=g.stats();
+
+    if((g_last_game_elapsed_us!=0&&static_cast<Uint64>(stats.elapsed_us)<g_last_game_elapsed_us)||
+       (g_piece_ghost_output_w!=0&&(g_piece_ghost_output_w!=output_w||g_piece_ghost_output_h!=output_h))){
+        clearPieceGhostSamples();
+        g_last_piece_motion_valid=false;
+    }
+    g_last_game_elapsed_us=static_cast<Uint64>(std::max<std::int64_t>(0,stats.elapsed_us));
+    g_piece_ghost_output_w=output_w;
+    g_piece_ghost_output_h=output_h;
+
+    const PieceMotionStamp motion{active.piece,active.rot,active.x,active.y,stats.pieces};
+    const bool changed=!g_last_piece_motion_valid||motion.piece!=g_last_piece_motion.piece||
+        motion.rotation!=g_last_piece_motion.rotation||motion.x!=g_last_piece_motion.x||
+        motion.y!=g_last_piece_motion.y||motion.locked_pieces!=g_last_piece_motion.locked_pieces;
+    if(!changed)return;
+
+    g_last_piece_motion=motion;
+    g_last_piece_motion_valid=true;
+    ++g_piece_motion_serial;
+    if(g_piece_motion_serial==0)++g_piece_motion_serial;
+    if(active.piece==Piece::None)return;
+
+    PieceGhostSample sample{};
+    sample.captured_ms=SDL_GetTicks();
+    sample.serial=g_piece_motion_serial;
+    C piece_color=color(active.piece);
+    if(g_palette_affects_pieces)piece_color=paletteColor(piece_color);
+    sample.color=piece_color;
+    for(auto block:blocks(active.piece,active.rot)){
+        const int visible_y=active.y+block.y-kHiddenH;
+        if(visible_y<0||visible_y>=kVisibleH||sample.block_count>=4)continue;
+        const float design_x=bx+(active.x+block.x)*cell;
+        const float design_y=by+visible_y*cell;
+        sample.blocks[static_cast<std::size_t>(sample.block_count++)]={
+            (design_x+g_offset_x)*render_scale,(design_y+g_offset_y)*render_scale,
+            cell*render_scale,cell*render_scale};
+    }
+    if(sample.block_count<=0)return;
+    g_piece_ghost_samples[g_piece_ghost_head]=sample;
+    g_piece_ghost_head=(g_piece_ghost_head+1)%g_piece_ghost_samples.size();
+    g_piece_ghost_count=std::min(g_piece_ghost_count+1,g_piece_ghost_samples.size());
+}
 }
 
 void setVisualPalette(VisualPalette palette,bool affects_pieces){
@@ -922,6 +1003,58 @@ void renderChromaticFrame(SDL_Renderer*r,int w,int h){
     renderTextureCopy(r,g_post.input,nullptr,&blue,SDL_BLENDMODE_ADD,255,0,0,255);
 }
 
+void renderPieceGhostTrails(SDL_Renderer*r,int persistence,int trails,int lifetime_ms,int ghost_glow,bool preserve_colors){
+    if(!g_game_frame_seen||g_piece_ghost_count==0)return;
+    const Uint64 now=SDL_GetTicks();
+    std::array<std::size_t,kPieceGhostSampleCount> valid{};
+    std::size_t valid_count=0;
+    const std::size_t oldest=(g_piece_ghost_head+g_piece_ghost_samples.size()-g_piece_ghost_count)%g_piece_ghost_samples.size();
+    for(std::size_t n=0;n<g_piece_ghost_count;++n){
+        const std::size_t idx=(oldest+n)%g_piece_ghost_samples.size();
+        const auto& sample=g_piece_ghost_samples[idx];
+        if(sample.captured_ms==0||sample.serial==g_piece_motion_serial)continue;
+        if(lifetime_ms>0&&now-sample.captured_ms>=static_cast<Uint64>(lifetime_ms))continue;
+        valid[valid_count++]=idx;
+    }
+    if(valid_count==0)return;
+
+    const std::size_t wanted=std::min<std::size_t>(static_cast<std::size_t>(std::clamp(trails,1,8)),valid_count);
+    const int p=std::clamp(persistence,0,100);
+    const int strength=std::clamp(g_shader.strength,0,100);
+    const int base_alpha=std::clamp((70+p*13/10)*strength/100,18,190);
+    const int glow=std::clamp(ghost_glow,0,10);
+
+    for(std::size_t n=0;n<wanted;++n){
+        const std::size_t spread_index=wanted==1?valid_count-1:(n*(valid_count-1))/(wanted-1);
+        const auto& sample=g_piece_ghost_samples[valid[spread_index]];
+        float life=1.0f;
+        if(lifetime_ms>0){
+            const Uint64 age=now-sample.captured_ms;
+            life=std::clamp(1.0f-float(age)/float(std::max(1,lifetime_ms)),0.0f,1.0f);
+        }
+        const float rank=float(n+1)/float(wanted);
+        const int core_alpha=std::clamp(int(base_alpha*(0.55f+0.45f*rank)*(0.38f+0.62f*life)),6,210);
+        C ghost_color=preserve_colors?sample.color:C{190,215,230,255};
+
+        for(int b=0;b<sample.block_count;++b){
+            const SDL_FRect& q=sample.blocks[static_cast<std::size_t>(b)];
+            if(glow>0){
+                const float spread=0.7f+glow*0.65f;
+                const int glow_alpha=std::clamp(core_alpha*glow/24,1,72);
+                const C glow_color=alpha(ghost_color,glow_alpha);
+                fillAbs(r,q.x-spread,q.y,q.w,q.h,glow_color);
+                fillAbs(r,q.x+spread,q.y,q.w,q.h,glow_color);
+                fillAbs(r,q.x,q.y-spread,q.w,q.h,glow_color);
+                fillAbs(r,q.x,q.y+spread,q.w,q.h,glow_color);
+            }
+            const float inset=std::max(1.0f,std::min(q.w,q.h)*0.08f);
+            fillAbs(r,q.x+inset,q.y+inset,std::max(1.0f,q.w-inset*2),std::max(1.0f,q.h-inset*2),alpha(ghost_color,core_alpha));
+            outlineAbs(r,q.x+inset,q.y+inset,std::max(1.0f,q.w-inset*2),std::max(1.0f,q.h-inset*2),
+                       alpha(ghost_color,std::min(235,core_alpha+45)));
+        }
+    }
+}
+
 void expireHistory(std::size_t slot,int lifetime_ms){
     if(slot>=g_post.history.size()||lifetime_ms<=0)return;
     auto& history=g_post.history[slot];
@@ -1063,9 +1196,20 @@ void applyShaderPass(SDL_Renderer*r,SDL_Texture* input,SDL_Texture* output,std::
             break;
         case VisualShader::Ghosting:
             renderTextureCopy(r,input,nullptr,nullptr,SDL_BLENDMODE_NONE,255);
-            expireHistory(g_active_shader_slot,g_shader.ghost_lifetime_ms);
-            renderHistoryTrail(r,w,h,g_shader.persistence,g_shader.trail_length,{255,255,255,255},g_shader.ghost_glow,g_shader.colored_ghosts);
-            updateHistory(r,g_shader.persistence,g_shader.colored_ghosts);
+            if(g_game_frame_seen){
+                // Gameplay trails are previous tetromino positions, not a
+                // repeatedly blended copy of the whole screen. This keeps the
+                // silhouettes visible even when the board background is static.
+                g_post.history[g_active_shader_slot].valid=false;
+                g_post.history[g_active_shader_slot].started_ms=0;
+                renderPieceGhostTrails(r,g_shader.persistence,g_shader.trail_length,g_shader.ghost_lifetime_ms,
+                                       g_shader.ghost_glow,g_shader.colored_ghosts);
+            }else{
+                // Outside gameplay retain the generic full-frame afterimage.
+                expireHistory(g_active_shader_slot,g_shader.ghost_lifetime_ms);
+                renderHistoryTrail(r,w,h,g_shader.persistence,g_shader.trail_length,{255,255,255,255},g_shader.ghost_glow,g_shader.colored_ghosts);
+                updateHistory(r,g_shader.persistence,g_shader.colored_ghosts);
+            }
             break;
         case VisualShader::Arcade:
             renderTextureCopy(r,input,nullptr,nullptr,SDL_BLENDMODE_NONE,255);
@@ -1082,6 +1226,7 @@ void applyShaderPass(SDL_Renderer*r,SDL_Texture* input,SDL_Texture* output,std::
 }
 
 void beginVisualShaderFrame(SDL_Renderer*r){
+    g_game_frame_seen=false;
     g_post.capturing=false;
     g_post.blur_ready=false;
     if(!r)return;
@@ -1163,6 +1308,11 @@ void renderGame(SDL_Renderer*r,Game&g,const RenderInfo&i){
     const float stats_x=std::max(20.0f,bx-390.0f);
     const float hold_x=bx-150.0f;
     const float next_x=bx+board_w+25.0f;
+
+    g_game_frame_seen=true;
+    int output_w=960,output_h=720;
+    SDL_GetRenderOutputSize(r,&output_w,&output_h);
+    capturePieceGhostSample(g,bx,by,cell,canvas.scale,output_w,output_h);
 
     // playfield
     fill(r,bx-4,by-4,board_w+8,board_h+8,{30,35,45,255});
@@ -1747,7 +1897,7 @@ void renderShaderSettings(SDL_Renderer*r,const AppConfig&cfg,int sel,int shader_
         case VisualShader::Vignette: desc1="Vignette exposes radius and softness.";desc2="Lower radius makes the darkened edge region reach further inward.";break;
         case VisualShader::Analog: desc1="Analog exposes noise, flicker, horizontal jitter and distortion.";desc2="Its position in the slot stack decides whether later effects distort the noisy signal too.";break;
         case VisualShader::Chromatic: desc1="Chromatic exposes RGB offset and direction.";desc2="Direction cycles horizontal, vertical and two diagonal variants.";break;
-        case VisualShader::Ghosting: desc1="Ghosting has persistence, trail length, lifetime, Ghost Glow and Colored Ghosts.";desc2="Ghost Lifetime clears accumulated history on schedule; 0 is unlimited. Colored Ghosts preserves tetromino hues.";break;
+        case VisualShader::Ghosting: desc1="Ghosting tracks previous falling-piece positions with persistence, lifetime and glow.";desc2="Ghost Lifetime expires individual figurines; 0 is unlimited. Colored Ghosts preserves tetromino hues.";break;
         case VisualShader::Arcade: desc1="Arcade exposes its bloom, scanlines, vignette and pixel-grid mix.";desc2="Tune the components independently while Strength controls this whole pass.";break;
         default:break;
     }
