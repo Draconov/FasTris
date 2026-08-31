@@ -71,31 +71,20 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - name: Configure
-        run: cmake -S . -B build -A x64 -DFASTTRIS_BUILD_TESTS=OFF
+        run: cmake -S . -B build -A x64 -DFASTTRIS_BUILD_TESTS=OFF -DFASTTRIS_BUILD_TOOLS=OFF
       - name: Build
         run: cmake --build build --config Release --parallel
-      - name: Package
+      - name: Package single executable
         shell: pwsh
         run: |
-          $version = "${{ needs.version.outputs.version }}"
-          $stage = "dist/FasTris-v$version-windows-x64"
-          New-Item -ItemType Directory -Force -Path $stage | Out-Null
-          $required = @(
-            'build/Release/FasTris.exe',
-            'build/Release/fastris_verify.exe',
-            'build/Release/fastris_sequence.exe',
-            'build/Release/fastris_bench.exe'
-          )
-          foreach ($file in $required) {
-            if (-not (Test-Path $file)) { throw "Missing expected output: $file" }
-            Copy-Item $file $stage/
-          }
-          Copy-Item README.md,VERSION $stage/
-          Compress-Archive -Path $stage -DestinationPath "dist/FasTris-Windows.zip"
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+          $exe = 'build/Release/FasTris.exe'
+          if (-not (Test-Path $exe)) { throw "Missing expected output: $exe" }
+          Copy-Item $exe 'dist/FasTris.exe'
       - uses: actions/upload-artifact@v7
         with:
           name: windows
-          path: dist/*.zip
+          path: dist/FasTris.exe
           if-no-files-found: error
 
   linux:
@@ -268,9 +257,9 @@ jobs:
           signed="platform/android/app/build/outputs/apk/release/app-release.apk"
           unsigned="platform/android/app/build/outputs/apk/release/app-release-unsigned.apk"
           if [[ -s "$signed" ]]; then
-            cp "$signed" "dist/FasTris-Android.apk"
+            cp "$signed" "dist/FasTris.apk"
           elif [[ -s "$unsigned" ]]; then
-            cp "$unsigned" "dist/FasTris-Android.apk"
+            cp "$unsigned" "dist/FasTris.apk"
           else
             echo "No release APK produced" >&2
             find platform/android/app/build/outputs -maxdepth 5 -type f -print || true
@@ -300,11 +289,11 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          test -s "dist/FasTris-Windows.zip"
+          test -s "dist/FasTris.exe"
           test -s "dist/FasTris-Linux.tar.gz"
           test -s "dist/FasTris-macOS.zip"
           test -s "dist/FasTris-Web.zip"
-          test -s "dist/FasTris-Android.apk"
+          test -s "dist/FasTris.apk"
 
       - name: Create checksums
         shell: bash
@@ -312,11 +301,11 @@ jobs:
         run: |
           set -euo pipefail
           sha256sum \
-            FasTris-Windows.zip \
+            FasTris.exe \
             FasTris-Linux.tar.gz \
             FasTris-macOS.zip \
             FasTris-Web.zip \
-            FasTris-Android.apk \
+            FasTris.apk \
             > SHA256SUMS.txt
           test -s SHA256SUMS.txt
 
@@ -352,7 +341,7 @@ jobs:
             while IFS= read -r asset; do
               [[ -z "$asset" ]] && continue
               case "$asset" in
-                FasTris-Windows.zip|FasTris-Linux.tar.gz|FasTris-macOS.zip|FasTris-Web.zip|FasTris-Android.apk|SHA256SUMS.txt)
+                FasTris.exe|FasTris-Linux.tar.gz|FasTris-macOS.zip|FasTris-Web.zip|FasTris.apk|SHA256SUMS.txt)
                   ;;
                 *)
                   gh release delete-asset "$TAG" "$asset" --yes --repo "$GITHUB_REPOSITORY"
@@ -369,11 +358,11 @@ jobs:
           fi
 
           gh release upload "$TAG" \
-            dist/FasTris-Windows.zip \
+            dist/FasTris.exe \
             dist/FasTris-Linux.tar.gz \
             dist/FasTris-macOS.zip \
             dist/FasTris-Web.zip \
-            dist/FasTris-Android.apk \
+            dist/FasTris.apk \
             dist/SHA256SUMS.txt \
             --clobber \
             --repo "$GITHUB_REPOSITORY"

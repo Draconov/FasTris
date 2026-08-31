@@ -9,21 +9,20 @@ The intended public repository is `https://github.com/Draconov/FasTris`. The rel
 1. Change `VERSION`, for example from `0.1.0` to `0.2.0`.
 2. Commit the version change together with the code you want in that release.
 3. Push the commit to `main`.
-4. `.github/workflows/release.yml` notices that `vX.Y.Z` does not exist and builds every release target.
-5. Only after all platform builds succeed, the workflow creates GitHub Release `vX.Y.Z` and uploads the packages.
+4. `.github/workflows/release.yml` builds and tests every release target for that commit.
+5. Only after all required platform builds succeed, the workflow creates or refreshes GitHub Release `vX.Y.Z` and uploads the exact current assets.
 
-The release workflow checks every push to `main`, but it immediately skips platform release jobs when the current `VERSION` is already tagged. This also means a failed first release can be fixed and retried by pushing the CI fix without changing `VERSION`.
+If the current `VERSION` tag already exists, the workflow refreshes that tag/release to the tested `main` commit instead of creating duplicate versioned assets.
 
 Do **not** edit version numbers in CMake, Gradle, source code, or workflow artifact names. They all read `VERSION`.
 
 ## Generated release assets
 
-- `FasTris-vX.Y.Z-windows-x64.zip`
-- `FasTris-vX.Y.Z-linux-x86_64.tar.gz`
-- `FasTris-vX.Y.Z-macos-universal.zip` (Intel + Apple Silicon)
-- `FasTris-vX.Y.Z-web.zip`
-- `FasTris-vX.Y.Z-android.apk` when Android signing secrets are configured
-- `FasTris-vX.Y.Z-android-unsigned.apk` otherwise
+- `FasTris.exe` — single-file Windows x64 game executable
+- `FasTris-Linux.tar.gz`
+- `FasTris-macOS.zip` (Intel + Apple Silicon)
+- `FasTris-Web.zip`
+- `FasTris.apk` — signed when Android signing secrets are configured, unsigned otherwise
 - `SHA256SUMS.txt`
 
 GitHub also automatically provides source `.zip` and `.tar.gz` archives for the release tag.

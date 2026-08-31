@@ -1,5 +1,9 @@
 cmake_minimum_required(VERSION 3.20)
 
+if(POLICY CMP0091)
+    cmake_policy(SET CMP0091 NEW)
+endif()
+
 file(READ "${CMAKE_CURRENT_SOURCE_DIR}/VERSION" FASTTRIS_VERSION)
 string(STRIP "${FASTTRIS_VERSION}" FASTTRIS_VERSION)
 if(NOT FASTTRIS_VERSION MATCHES "^[0-9]+\\.[0-9]+\\.[0-9]+$")
@@ -7,6 +11,13 @@ if(NOT FASTTRIS_VERSION MATCHES "^[0-9]+\\.[0-9]+\\.[0-9]+$")
 endif()
 
 project(FasTris VERSION ${FASTTRIS_VERSION} LANGUAGES CXX)
+
+# The Windows release is a single self-contained FasTris.exe. SDL is already
+# linked statically; use the static MSVC runtime as well so the release does
+# not need a Visual C++ runtime DLL beside the executable.
+if(MSVC)
+    set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+endif()
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)

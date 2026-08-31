@@ -10,7 +10,7 @@
             android:name=".FasTrisActivity"
             android:configChanges="keyboard|keyboardHidden|orientation|screenLayout|screenSize|smallestScreenSize|uiMode"
             android:exported="true"
-            android:screenOrientation="sensorLandscape">
+            android:screenOrientation="fullSensor">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />

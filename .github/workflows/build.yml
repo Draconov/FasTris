@@ -50,20 +50,14 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - name: Configure
-        run: cmake -S . -B build -A x64 -DFASTTRIS_BUILD_TESTS=OFF
+        run: cmake -S . -B build -A x64 -DFASTTRIS_BUILD_TESTS=OFF -DFASTTRIS_BUILD_TOOLS=OFF
       - name: Build
         run: cmake --build build --config Release --parallel
-      - name: Verify outputs
+      - name: Verify single executable
         shell: pwsh
         run: |
-          $required = @(
-            'build/Release/FasTris.exe',
-            'build/Release/fastris_verify.exe',
-            'build/Release/fastris_sequence.exe',
-            'build/Release/fastris_bench.exe'
-          )
-          foreach ($file in $required) {
-            if (-not (Test-Path $file)) { throw "Missing expected output: $file" }
+          if (-not (Test-Path 'build/Release/FasTris.exe')) {
+            throw 'Missing expected output: build/Release/FasTris.exe'
           }
 
   desktop-linux:

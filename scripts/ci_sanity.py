@@ -88,16 +88,21 @@ for needle in ["actions/deploy-pages@", "actions/upload-pages-artifact@", "build
         fail(f"pages.yml is missing required Pages deployment marker: {needle}")
 
 release_assets = [
-    "FasTris-Windows.zip",
+    "FasTris.exe",
     "FasTris-Linux.tar.gz",
     "FasTris-macOS.zip",
     "FasTris-Web.zip",
-    "FasTris-Android.apk",
+    "FasTris.apk",
     "SHA256SUMS.txt",
 ]
 for asset in release_assets:
     if asset not in release_workflow:
         fail(f"release.yml is missing required release asset: {asset}")
+
+if "dist/FasTris.exe" not in release_workflow or "FASTTRIS_BUILD_TOOLS=OFF" not in release_workflow:
+    fail("Windows release must publish the single FasTris.exe app without developer tools")
+if "dist/FasTris.apk" not in release_workflow:
+    fail("Android release must publish the clean FasTris.apk asset name")
 
 if re.search(r"dist/FasTris-v[^\n\"']*\.(?:zip|tar\.gz|apk)", release_workflow):
     fail("release.yml must not publish versioned duplicate platform packages")
@@ -106,11 +111,11 @@ if re.search(r"dist/FasTris-v[^\n\"']*\.(?:zip|tar\.gz|apk)", release_workflow):
 readme = (ROOT / "README.md").read_text(encoding="utf-8")
 for needle in [
     "https://draconov.github.io/FasTris/",
-    "releases/latest/download/FasTris-Windows.zip",
+    "releases/latest/download/FasTris.exe",
     "releases/latest/download/FasTris-Linux.tar.gz",
     "releases/latest/download/FasTris-macOS.zip",
     "releases/latest/download/FasTris-Web.zip",
-    "releases/latest/download/FasTris-Android.apk",
+    "releases/latest/download/FasTris.apk",
 ]:
     if needle not in readme:
         fail(f"README.md is missing expected distribution badge target: {needle}")

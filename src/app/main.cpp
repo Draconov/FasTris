@@ -11,6 +11,7 @@
 #include <SDL3/SDL_iostream.h>
 #include <SDL3/SDL_main.h>
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <cstdint>
 #include <ctime>
@@ -31,9 +32,34 @@
 #if defined(__EMSCRIPTEN__)
 #include <emscripten/emscripten.h>
 #endif
+#if defined(__ANDROID__)
+#include <jni.h>
+#endif
 
 using namespace fasttris;
 using namespace fasttris::app;
+
+#if defined(__ANDROID__)
+namespace {
+std::atomic<Uint32> g_android_touch_event_type{0};
+std::atomic<int> g_android_screen{0};
+
+enum AndroidTouchCode : int {
+    AndroidLeft = 0,
+    AndroidRight,
+    AndroidDown,
+    AndroidUp,
+    AndroidRotateCW,
+    AndroidRotateCCW,
+    AndroidRotate180,
+    AndroidHardDrop,
+    AndroidHold,
+    AndroidPause,
+    AndroidConfirm,
+    AndroidBack
+};
+}
+#endif
 
 namespace {
 enum class Screen { Menu, Game, Settings, SeedSettings, Controls, Miscellaneous, Shaders, Textures, Palettes, Help, Replay, ReplayMenu, SandboxSetup };
@@ -312,6 +338,18 @@ EM_JS(void, webPasteSeedFromClipboard, (), {
             Module.ccall('fastris_web_seed_pasted',null,['string'],[text]);
         }).catch(()=>fail('browser blocked clipboard read'));
     }else fail('clipboard read is unavailable in this browser');
+});
+
+EM_JS(void, webCloseGameTab, (), {
+    try {
+        window.open('', '_self');
+        window.close();
+    } catch (e) {}
+    setTimeout(() => {
+        if (!window.closed) {
+            try { window.location.replace('about:blank'); } catch (e) {}
+        }
+    }, 50);
 });
 #endif
 
@@ -1260,10 +1298,18 @@ struct AppState {
             return ok;
         }
 
+#if defined(__ANDROID__)
+        SDL_SetHint(SDL_HINT_ORIENTATIONS, "LandscapeLeft LandscapeRight Portrait PortraitUpsideDown");
+#endif
         if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_GAMEPAD)) {
             std::cerr << "SDL_Init failed: " << SDL_GetError() << "\n";
             return false;
         }
+#if defined(__ANDROID__)
+        const Uint32 android_event_type = SDL_RegisterEvents(1);
+        if (android_event_type != 0)
+            g_android_touch_event_type.store(android_event_type, std::memory_order_relaxed);
+#endif
 
         const auto root = preferenceRoot();
         if (!root.empty()) {
@@ -1338,6 +1384,68 @@ struct AppState {
     SDL_AppResult onEvent(SDL_Event& ev) {
         if (ev.type == SDL_EVENT_QUIT) return SDL_APP_SUCCESS;
 
+#if defined(__ANDROID__)
+        const Uint32 android_event_type = g_android_touch_event_type.load(std::memory_order_relaxed);
+        if (android_event_type != 0 && ev.type == android_event_type) {
+            const int code = ev.user.code;
+            const bool down = ev.user.data1 != nullptr;
+            const Uint64 timestamp = SDL_GetTicksNS();
+
+            if (screen == Screen::Game && run.game) {
+                if (code == AndroidBack) {
+                    if (down) screen = Screen::Menu;
+                    return SDL_APP_CONTINUE;
+                }
+                if (code == AndroidPause) {
+                    if (down) {
+                        if (run.game->rules().tournament) run.status = "PAUSE DISABLED IN TOURNAMENT";
+                        else run.togglePause(timestamp);
+                    }
+                    return SDL_APP_CONTINUE;
+                }
+
+                Action action = Action::Count;
+                switch (code) {
+                    case AndroidLeft: action = Action::Left; break;
+                    case AndroidRight: action = Action::Right; break;
+                    case AndroidDown: action = Action::SoftDrop; break;
+                    case AndroidRotateCW: action = Action::RotateCW; break;
+                    case AndroidRotateCCW: action = Action::RotateCCW; break;
+                    case AndroidRotate180: action = Action::Rotate180; break;
+                    case AndroidHardDrop: action = Action::HardDrop; break;
+                    case AndroidHold: action = Action::Hold; break;
+                    default: break;
+                }
+                if (action != Action::Count) run.input(timestamp, action, down);
+                return SDL_APP_CONTINUE;
+            }
+
+            SDL_Keycode key = SDLK_UNKNOWN;
+            switch (code) {
+                case AndroidLeft: key = SDLK_LEFT; break;
+                case AndroidRight: key = SDLK_RIGHT; break;
+                case AndroidDown: key = SDLK_DOWN; break;
+                case AndroidUp: key = SDLK_UP; break;
+                case AndroidConfirm:
+                case AndroidRotateCW:
+                case AndroidHardDrop: key = SDLK_RETURN; break;
+                case AndroidBack:
+                case AndroidRotateCCW:
+                case AndroidPause: key = SDLK_ESCAPE; break;
+                default: break;
+            }
+            if (key != SDLK_UNKNOWN) {
+                SDL_Event mapped{};
+                mapped.type = down ? SDL_EVENT_KEY_DOWN : SDL_EVENT_KEY_UP;
+                mapped.key.timestamp = timestamp;
+                mapped.key.key = key;
+                mapped.key.repeat = false;
+                return onEvent(mapped);
+            }
+            return SDL_APP_CONTINUE;
+        }
+#endif
+
         if (ev.type == SDL_EVENT_GAMEPAD_ADDED) {
             if (auto* pad = SDL_OpenGamepad(ev.gdevice.which)) pads.push_back(pad);
             return SDL_APP_CONTINUE;
@@ -1388,6 +1496,9 @@ struct AppState {
                         replay_status.clear();
                         screen = Screen::ReplayMenu;
                     } else {
+#if defined(__EMSCRIPTEN__)
+                        webCloseGameTab();
+#endif
                         return SDL_APP_SUCCESS;
                     }
                 }
@@ -1770,6 +1881,9 @@ struct AppState {
     }
 
     SDL_AppResult iterate() {
+#if defined(__ANDROID__)
+        g_android_screen.store(static_cast<int>(screen), std::memory_order_relaxed);
+#endif
         frame_start = SDL_GetTicksNS();
         const auto now = frame_start;
         processReplayDialog();
@@ -1865,6 +1979,24 @@ struct AppState {
 };
 } // namespace
 
+#if defined(__ANDROID__)
+extern "C" JNIEXPORT void JNICALL
+Java_com_draconov_fastris_FasTrisActivity_nativeTouchInput(JNIEnv*, jclass, jint code, jboolean down) {
+    const Uint32 event_type = g_android_touch_event_type.load(std::memory_order_relaxed);
+    if (event_type == 0) return;
+    SDL_Event event{};
+    event.type = event_type;
+    event.user.code = static_cast<Sint32>(code);
+    event.user.data1 = down == JNI_TRUE ? reinterpret_cast<void*>(static_cast<std::uintptr_t>(1)) : nullptr;
+    SDL_PushEvent(&event);
+}
+
+extern "C" JNIEXPORT jint JNICALL
+Java_com_draconov_fastris_FasTrisActivity_nativeScreen(JNIEnv*, jclass) {
+    return static_cast<jint>(g_android_screen.load(std::memory_order_relaxed));
+}
+#endif
+
 #if defined(__EMSCRIPTEN__)
 extern "C" EMSCRIPTEN_KEEPALIVE void fastris_web_replay_loaded_bytes(unsigned char* data, int size) {
     ReplayDialogResult result;
@@ -1932,6 +2064,9 @@ SDL_AppResult SDL_AppIterate(void* appstate) {
 }
 
 void SDL_AppQuit(void* appstate, SDL_AppResult) {
+#if defined(__ANDROID__)
+    g_android_touch_event_type.store(0, std::memory_order_relaxed);
+#endif
     auto* state = static_cast<AppState*>(appstate);
     if (!state) return;
     state->shutdown();
