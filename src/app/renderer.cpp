@@ -1418,35 +1418,50 @@ void renderPaletteSettings(SDL_Renderer*r,const AppConfig&cfg,int sel){
     beginCanvas(r,true);
     set(r,{11,14,20,255});SDL_RenderClear(r);
     txt(r,330,34,"PALETTES",{235,240,248,255},true);
-    txt(r,210,76,"Ten presentation palettes. Changes preview and apply immediately.",{145,155,170,255});
+    txt(r,210,76,"Scrollable palette list. Changes preview and apply immediately.",{145,155,170,255});
 
-    constexpr int rows=5;
-    constexpr float box_w=330.0f;
-    constexpr float box_h=58.0f;
-    constexpr float left_x=125.0f;
-    constexpr float right_x=505.0f;
-    constexpr float first_y=125.0f;
-    constexpr float row_step=75.0f;
-    for(int n=0;n<kVisualPaletteCount;++n){
+    constexpr int visible_rows=6;
+    constexpr float list_x=170.0f;
+    constexpr float list_y=112.0f;
+    constexpr float list_w=600.0f;
+    constexpr float row_h=58.0f;
+    constexpr float row_gap=6.0f;
+    constexpr float list_h=visible_rows*row_h+(visible_rows-1)*row_gap;
+    const int max_first=std::max(0,kVisualPaletteCount-visible_rows);
+    const int desired_first=sel-visible_rows/2;
+    const int first=std::clamp(desired_first,0,max_first);
+    const int last=std::min(kVisualPaletteCount,first+visible_rows);
+
+    fill(r,list_x-12.0f,list_y-12.0f,list_w+36.0f,list_h+24.0f,{13,18,25,255});
+    outline(r,list_x-12.0f,list_y-12.0f,list_w+36.0f,list_h+24.0f,{42,54,68,255});
+
+    for(int n=first;n<last;++n){
         const auto palette=static_cast<VisualPalette>(n);
         const bool active=palette==cfg.palette;
         const bool selected=n==sel;
-        const int column=n/rows;
-        const int row=n%rows;
-        const float x=column==0?left_x:right_x;
-        const float y=first_y+row*row_step;
-        if(selected)fill(r,x,y-10,box_w,box_h,{20,27,37,255});
-        outline(r,x,y-10,box_w,box_h,selected?C{120,220,255,255}:C{45,55,70,255});
-        txt(r,x+20,y+1,(selected?"> ":"  ")+std::string(paletteName(palette)),selected?C{120,220,255,255}:C{210,215,225,255},true);
-        if(active)txt(r,x+245,y+5,"ACTIVE",{125,220,170,255});
+        const int row=n-first;
+        const float y=list_y+row*(row_h+row_gap);
+        if(selected)fill(r,list_x,y,list_w,row_h,{20,27,37,255});
+        outline(r,list_x,y,list_w,row_h,selected?C{120,220,255,255}:C{45,55,70,255});
+        txt(r,list_x+20.0f,y+14.0f,(selected?"> ":"  ")+std::string(paletteName(palette)),
+            selected?C{120,220,255,255}:C{210,215,225,255},true);
+        if(active)txt(r,list_x+485.0f,y+18.0f,"ACTIVE",{125,220,170,255});
     }
 
-    txt(r,155,535,"LO-FI WARM / COOL: muted low-contrast palettes",{155,168,185,255});
-    txt(r,155,560,"PASTEL BLUE: soft icy blue   HALLOWEEN: purple, orange and pumpkin",{155,168,185,255});
-    txt(r,155,585,"SUNSET / SUNRISE: deep violet through coral into warm gold",{155,168,185,255});
-    txt(r,155,612,cfg.palette_affects_pieces?"Piece recoloring: ON":"Piece recoloring: OFF (classic tetromino colors)",
+    // Compact scrollbar mirrors the automatically scrolled list window.
+    constexpr float track_x=list_x+list_w+14.0f;
+    fill(r,track_x,list_y,6.0f,list_h,{29,36,47,255});
+    const float thumb_h=std::max(34.0f,list_h*(float(visible_rows)/float(kVisualPaletteCount)));
+    const float travel=std::max(0.0f,list_h-thumb_h);
+    const float fraction=max_first>0?float(first)/float(max_first):0.0f;
+    fill(r,track_x-2.0f,list_y+travel*fraction,10.0f,thumb_h,{105,185,215,255});
+
+    const auto selected_palette=static_cast<VisualPalette>(std::clamp(sel,0,kVisualPaletteCount-1));
+    txt(r,170,530,std::string("SELECTED: ")+paletteName(selected_palette),{155,205,220,255},true);
+    txt(r,170,562,cfg.palette_affects_pieces?"Piece recoloring: ON":"Piece recoloring: OFF (classic tetromino colors)",
         cfg.palette_affects_pieces?C{125,220,170,255}:C{235,180,125,255});
-    txt(r,155,650,"UP/DOWN rows   LEFT/RIGHT columns   ENTER/ESC back",{135,145,160,255});
+    txt(r,170,594,"UP/DOWN scroll   LEFT/RIGHT page   Mouse wheel scrolls",{135,145,160,255});
+    txt(r,170,622,"HOME/END jump   ENTER/ESC back",{135,145,160,255});
 }
 
 void renderTextureSettings(SDL_Renderer*r,const AppConfig&cfg,int sel){

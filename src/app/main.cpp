@@ -1746,24 +1746,33 @@ struct AppState {
         }
 
         if(screen==Screen::Palettes){
+            auto selectPalette=[&](int next){
+                next=std::clamp(next,0,kVisualPaletteCount-1);
+                if(next==palette_sel)return;
+                palette_sel=next;
+                cfg.palette=static_cast<VisualPalette>(palette_sel);
+                saveConfig(config_path,cfg);
+            };
             if(ev.type==SDL_EVENT_KEY_DOWN&&!ev.key.repeat){
                 const auto key=ev.key.key;
-                constexpr int palette_rows=5;
                 if(key==SDLK_ESCAPE||key==SDLK_RETURN||key==SDLK_KP_ENTER){
                     screen=Screen::Miscellaneous;
-                }else if(key==SDLK_UP||key==SDLK_DOWN){
-                    const int column=palette_sel/palette_rows;
-                    int row=palette_sel%palette_rows;
-                    row=(row+(key==SDLK_UP?palette_rows-1:1))%palette_rows;
-                    const int candidate=column*palette_rows+row;
-                    if(candidate<kVisualPaletteCount)palette_sel=candidate;
-                    cfg.palette=static_cast<VisualPalette>(palette_sel);
-                    saveConfig(config_path,cfg);
-                }else if(key==SDLK_LEFT||key==SDLK_RIGHT){
-                    palette_sel=(palette_sel+palette_rows)%kVisualPaletteCount;
-                    cfg.palette=static_cast<VisualPalette>(palette_sel);
-                    saveConfig(config_path,cfg);
+                }else if(key==SDLK_UP){
+                    selectPalette(palette_sel-1);
+                }else if(key==SDLK_DOWN){
+                    selectPalette(palette_sel+1);
+                }else if(key==SDLK_PAGEUP||key==SDLK_LEFT){
+                    selectPalette(palette_sel-5);
+                }else if(key==SDLK_PAGEDOWN||key==SDLK_RIGHT){
+                    selectPalette(palette_sel+5);
+                }else if(key==SDLK_HOME){
+                    selectPalette(0);
+                }else if(key==SDLK_END){
+                    selectPalette(kVisualPaletteCount-1);
                 }
+            }else if(ev.type==SDL_EVENT_MOUSE_WHEEL){
+                if(ev.wheel.y>0.0f)selectPalette(palette_sel-1);
+                else if(ev.wheel.y<0.0f)selectPalette(palette_sel+1);
             }
             return SDL_APP_CONTINUE;
         }
