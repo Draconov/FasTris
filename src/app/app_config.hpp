@@ -26,13 +26,11 @@ enum class VisualShader : int {
     LCD,
     DotMatrix,
     Bloom,
-    Phosphor,
     Scanlines,
     Vignette,
     Analog,
     Chromatic,
     Ghosting,
-    PixelGrid,
     Arcade,
     Count
 };
@@ -54,8 +52,6 @@ enum class VisualTexture : int {
     Grid,
     Wireframe,
     Outline,
-    Hollow,
-    Raised,
     Recessed,
     Arcade,
     RetroLCD,

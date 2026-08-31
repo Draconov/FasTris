@@ -32,8 +32,6 @@ const char* textureName(VisualTexture texture){
         case VisualTexture::Grid:return "GRID";
         case VisualTexture::Wireframe:return "WIREFRAME";
         case VisualTexture::Outline:return "OUTLINE";
-        case VisualTexture::Hollow:return "HOLLOW";
-        case VisualTexture::Raised:return "RAISED";
         case VisualTexture::Recessed:return "RECESSED";
         case VisualTexture::Arcade:return "ARCADE";
         case VisualTexture::RetroLCD:return "RETRO LCD";
@@ -49,13 +47,11 @@ const char* shaderName(VisualShader shader){
         case VisualShader::LCD:return "LCD";
         case VisualShader::DotMatrix:return "DOT MATRIX";
         case VisualShader::Bloom:return "BLOOM";
-        case VisualShader::Phosphor:return "PHOSPHOR";
         case VisualShader::Scanlines:return "SCANLINES";
         case VisualShader::Vignette:return "VIGNETTE";
         case VisualShader::Analog:return "ANALOG";
         case VisualShader::Chromatic:return "CHROMATIC";
         case VisualShader::Ghosting:return "GHOSTING";
-        case VisualShader::PixelGrid:return "PIXEL GRID";
         case VisualShader::Arcade:return "ARCADE";
         default:return "NONE";
     }
@@ -66,8 +62,9 @@ constexpr std::size_t ix(Action a){return static_cast<std::size_t>(a);}
 
 constexpr std::array<TextureControl,1> kTextureDefaultControls={TextureControl::CellGap};
 constexpr std::array<TextureControl,1> kTextureFlatControls={TextureControl::CellGap};
-constexpr std::array<TextureControl,5> kTextureBeveledControls={
-    TextureControl::Depth,TextureControl::Highlight,TextureControl::Shadow,TextureControl::Border,TextureControl::CellGap};
+constexpr std::array<TextureControl,6> kTextureBeveledControls={
+    TextureControl::Depth,TextureControl::Highlight,TextureControl::Shadow,
+    TextureControl::Border,TextureControl::Softness,TextureControl::CellGap};
 constexpr std::array<TextureControl,5> kTextureSoftBevelControls={
     TextureControl::Depth,TextureControl::Highlight,TextureControl::Shadow,TextureControl::Softness,TextureControl::CellGap};
 constexpr std::array<TextureControl,5> kTextureGlassControls={
@@ -84,14 +81,11 @@ constexpr std::array<TextureControl,5> kTextureStripesControls={
     TextureControl::Angle,TextureControl::Spacing,TextureControl::LineThickness,TextureControl::Contrast,TextureControl::CellGap};
 constexpr std::array<TextureControl,4> kTextureGridControls={
     TextureControl::GridSize,TextureControl::LineThickness,TextureControl::Contrast,TextureControl::CellGap};
-constexpr std::array<TextureControl,3> kTextureWireframeControls={
-    TextureControl::Border,TextureControl::EdgeLight,TextureControl::CellGap};
+constexpr std::array<TextureControl,5> kTextureWireframeControls={
+    TextureControl::Border,TextureControl::EdgeLight,TextureControl::InnerDarken,
+    TextureControl::Transparency,TextureControl::CellGap};
 constexpr std::array<TextureControl,3> kTextureOutlineControls={
     TextureControl::Border,TextureControl::InnerDarken,TextureControl::CellGap};
-constexpr std::array<TextureControl,3> kTextureHollowControls={
-    TextureControl::Border,TextureControl::EdgeLight,TextureControl::CellGap};
-constexpr std::array<TextureControl,4> kTextureRaisedControls={
-    TextureControl::Depth,TextureControl::Highlight,TextureControl::Shadow,TextureControl::CellGap};
 constexpr std::array<TextureControl,4> kTextureRecessedControls={
     TextureControl::Depth,TextureControl::Highlight,TextureControl::Shadow,TextureControl::CellGap};
 constexpr std::array<TextureControl,5> kTextureArcadeControls={
@@ -203,19 +197,16 @@ void clampTextureControls(AppConfig& c){
 constexpr std::array<ShaderControl,7> kCrtControls={
     ShaderControl::Strength,ShaderControl::Scanlines,ShaderControl::ScanlineSpacing,
     ShaderControl::Glow,ShaderControl::Curvature,ShaderControl::Vignette,ShaderControl::Softness};
-constexpr std::array<ShaderControl,5> kTerminalControls={
-    ShaderControl::Strength,ShaderControl::Scanlines,ShaderControl::Glow,
-    ShaderControl::Persistence,ShaderControl::Flicker};
-constexpr std::array<ShaderControl,5> kLcdControls={
+constexpr std::array<ShaderControl,6> kTerminalControls={
+    ShaderControl::Strength,ShaderControl::Glow,ShaderControl::Persistence,
+    ShaderControl::TrailLength,ShaderControl::Scanlines,ShaderControl::Flicker};
+constexpr std::array<ShaderControl,6> kLcdControls={
     ShaderControl::Strength,ShaderControl::PixelGrid,ShaderControl::GridSize,
-    ShaderControl::Subpixel,ShaderControl::Sharpness};
+    ShaderControl::LineThickness,ShaderControl::Subpixel,ShaderControl::Softness};
 constexpr std::array<ShaderControl,4> kDotMatrixControls={
     ShaderControl::Strength,ShaderControl::DotSize,ShaderControl::DotSpacing,ShaderControl::DotBrightness};
 constexpr std::array<ShaderControl,4> kBloomControls={
     ShaderControl::Strength,ShaderControl::Radius,ShaderControl::Threshold,ShaderControl::Softness};
-constexpr std::array<ShaderControl,5> kPhosphorControls={
-    ShaderControl::Strength,ShaderControl::Glow,ShaderControl::Persistence,
-    ShaderControl::TrailLength,ShaderControl::Scanlines};
 constexpr std::array<ShaderControl,3> kScanlineControls={
     ShaderControl::Strength,ShaderControl::ScanlineSpacing,ShaderControl::LineThickness};
 constexpr std::array<ShaderControl,3> kVignetteControls={
@@ -227,8 +218,6 @@ constexpr std::array<ShaderControl,3> kChromaticControls={
     ShaderControl::Strength,ShaderControl::RgbOffset,ShaderControl::Direction};
 constexpr std::array<ShaderControl,3> kGhostingControls={
     ShaderControl::Strength,ShaderControl::Persistence,ShaderControl::TrailLength};
-constexpr std::array<ShaderControl,3> kPixelGridControls={
-    ShaderControl::Strength,ShaderControl::GridSize,ShaderControl::LineThickness};
 constexpr std::array<ShaderControl,5> kArcadeControls={
     ShaderControl::Strength,ShaderControl::BloomAmount,ShaderControl::Scanlines,
     ShaderControl::Vignette,ShaderControl::PixelGrid};
@@ -394,8 +383,6 @@ std::span<const TextureControl> textureControls(VisualTexture texture){
         case VisualTexture::Grid:return kTextureGridControls;
         case VisualTexture::Wireframe:return kTextureWireframeControls;
         case VisualTexture::Outline:return kTextureOutlineControls;
-        case VisualTexture::Hollow:return kTextureHollowControls;
-        case VisualTexture::Raised:return kTextureRaisedControls;
         case VisualTexture::Recessed:return kTextureRecessedControls;
         case VisualTexture::Arcade:return kTextureArcadeControls;
         case VisualTexture::RetroLCD:return kTextureRetroLcdControls;
@@ -470,13 +457,11 @@ std::span<const ShaderControl> shaderControls(VisualShader shader){
         case VisualShader::LCD:return kLcdControls;
         case VisualShader::DotMatrix:return kDotMatrixControls;
         case VisualShader::Bloom:return kBloomControls;
-        case VisualShader::Phosphor:return kPhosphorControls;
         case VisualShader::Scanlines:return kScanlineControls;
         case VisualShader::Vignette:return kVignetteControls;
         case VisualShader::Analog:return kAnalogControls;
         case VisualShader::Chromatic:return kChromaticControls;
         case VisualShader::Ghosting:return kGhostingControls;
-        case VisualShader::PixelGrid:return kPixelGridControls;
         case VisualShader::Arcade:return kArcadeControls;
         case VisualShader::None:
         default:return kNoControls;

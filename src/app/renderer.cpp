@@ -205,34 +205,58 @@ void drawTexturedCell(SDL_Renderer*r,float x,float y,float size,C base){
             fill(r,ix,iy,w,h,base);
             break;
         case VisualTexture::Beveled:{
-            fill(r,ix,iy,w,h,base);
+            fill(r,ix,iy,w,h,shade(base,-4));
             const float d=std::clamp(1.0f+w*(g_texture.depth/100.0f)*0.18f,1.0f,std::max(1.0f,w*0.25f));
             fill(r,ix,iy,w,d,hi);fill(r,ix,iy,d,h,hi);
             fill(r,ix,iy+h-d,w,d,sh);fill(r,ix+w-d,iy,d,h,sh);
             drawNestedBorder(r,ix,iy,w,h,border,shade(base,-12));
+            const float inset=std::min(std::max(1.0f,d),std::max(1.0f,std::min(w,h)*0.28f));
+            if(w>inset*2.0f+1.0f&&h>inset*2.0f+1.0f){
+                fill(r,ix+inset,iy+inset,w-inset*2.0f,h-inset*2.0f,shade(base,6+g_texture.softness/6));
+                const int layers=1+g_texture.softness/40;
+                for(int n=0;n<layers;++n){
+                    const float s=inset+float(n);
+                    if(w-s*2.0f<=1.0f||h-s*2.0f<=1.0f)break;
+                    const int a=std::max(20,120-n*28);
+                    fill(r,ix+s,iy+s,w-s*2.0f,1.0f,alpha(hi,a));
+                    fill(r,ix+s,iy+s,1.0f,h-s*2.0f,alpha(hi,a));
+                    fill(r,ix+s,iy+h-s-1.0f,w-s*2.0f,1.0f,alpha(sh,a));
+                    fill(r,ix+w-s-1.0f,iy+s,1.0f,h-s*2.0f,alpha(sh,a));
+                }
+            }
             break;
         }
         case VisualTexture::SoftBevel:{
-            fill(r,ix,iy,w,h,base);
-            const int layers=1+g_texture.softness/35;
-            const float maxd=std::clamp(1.0f+w*(g_texture.depth/100.0f)*0.15f,1.0f,std::max(1.0f,w*0.22f));
+            fill(r,ix,iy,w,h,shade(base,4));
+            const int layers=2+g_texture.softness/25;
+            const float maxd=std::clamp(1.0f+w*(g_texture.depth/100.0f)*0.13f,1.0f,std::max(1.0f,w*0.20f));
             for(int n=0;n<layers;++n){
-                const float d=std::max(1.0f,maxd-float(n));
-                const int fade=std::max(6,100-n*22);
-                fill(r,ix+n,iy+n,w-2*n,1,alpha(hi,255*fade/100));
-                fill(r,ix+n,iy+n,1,h-2*n,alpha(hi,255*fade/100));
-                fill(r,ix+n,iy+h-n-d,w-2*n,1,alpha(sh,255*fade/100));
-                fill(r,ix+w-n-d,iy+n,1,h-2*n,alpha(sh,255*fade/100));
+                const float inset=float(n)*0.8f;
+                const float d=std::max(1.0f,maxd-inset*0.6f);
+                if(w-inset*2.0f<=1.0f||h-inset*2.0f<=1.0f)break;
+                const int fade=std::max(10,125-n*18);
+                fill(r,ix+inset,iy+inset,w-inset*2.0f,1.0f,alpha(hi,fade));
+                fill(r,ix+inset,iy+inset,1.0f,h-inset*2.0f,alpha(hi,fade));
+                fill(r,ix+inset,iy+h-inset-d,w-inset*2.0f,1.0f,alpha(sh,fade));
+                fill(r,ix+w-inset-d,iy+inset,1.0f,h-inset*2.0f,alpha(sh,fade));
+            }
+            const float inner_inset=std::min(std::max(1.0f,maxd+1.0f),std::min(w,h)*0.30f);
+            if(w>inner_inset*2.0f+1.0f&&h>inner_inset*2.0f+1.0f){
+                fill(r,ix+inner_inset,iy+inner_inset,w-inner_inset*2.0f,h-inner_inset*2.0f,shade(base,10+g_texture.highlight/8));
+                fill(r,ix+inner_inset*1.15f,iy+inner_inset*1.10f,w*0.52f,std::max(1.0f,h*0.12f),alpha(shade(base,75),70+g_texture.highlight));
             }
             break;
         }
         case VisualTexture::Glass:{
             const int a=255*(100-std::clamp(g_texture.transparency,0,70))/100;
-            fill(r,ix,iy,w,h,alpha(base,a));
-            fill(r,ix+w*0.10f,iy+h*0.47f,w*0.80f,h*0.43f,alpha(inner,std::max(50,a*3/4)));
-            const float band=std::max(1.0f,h*(0.08f+0.12f*g_texture.reflection/100.0f));
-            fill(r,ix+w*0.10f,iy+h*0.12f,w*0.80f,band,alpha(shade(base,75),40+g_texture.reflection*2));
-            drawNestedBorder(r,ix,iy,w,h,1,alpha(edge,100+g_texture.edge_light));
+            fill(r,ix,iy,w,h,alpha(shade(base,8),a));
+            fill(r,ix+w*0.08f,iy+h*0.54f,w*0.84f,h*0.30f,alpha(shade(base,-28-g_texture.inner_darken/3),std::max(55,a*3/4)));
+            const float band=std::max(1.0f,h*(0.10f+0.16f*g_texture.reflection/100.0f));
+            fill(r,ix+w*0.08f,iy+h*0.11f,w*0.84f,band,alpha(shade(base,78),55+g_texture.reflection*2));
+            fill(r,ix+w*0.18f,iy+h*0.26f,w*0.40f,std::max(1.0f,h*0.08f),alpha(shade(base,92),35+g_texture.reflection));
+            fill(r,ix+w*0.55f,iy+h*0.18f,w*0.18f,h*0.45f,alpha(shade(base,88),18+g_texture.reflection));
+            drawNestedBorder(r,ix,iy,w,h,1,alpha(edge,110+g_texture.edge_light));
+            if(w>8.0f&&h>8.0f)drawNestedBorder(r,ix+1.0f,iy+1.0f,w-2.0f,h-2.0f,1,alpha(shade(base,70),50+g_texture.edge_light));
             break;
         }
         case VisualTexture::Neon:
@@ -241,25 +265,38 @@ void drawTexturedCell(SDL_Renderer*r,float x,float y,float size,C base){
             if(w>8)drawNestedBorder(r,ix+border+1,iy+border+1,w-2*(border+1),h-2*(border+1),1,alpha(shade(base,65),90+g_texture.edge_light));
             break;
         case VisualTexture::Metallic:{
-            fill(r,ix,iy,w,h,shade(base,-8));
-            std::array<SDL_FRect,16> rects{};int count=0;
+            fill(r,ix,iy,w,h,shade(base,-14));
+            std::array<SDL_FRect,24> rects{};int count=0;
             const int spacing=std::max(3,g_texture.spacing);
             const int thick=std::clamp(g_texture.line_thickness,1,4);
-            for(float yy=iy+2;yy<iy+h-1&&count<int(rects.size());yy+=spacing){rects[count++]={ix+1,yy,w-2,float(thick)};}
-            fillBatch(r,rects,count,alpha(shade(base,45+g_texture.contrast/3),90+g_texture.highlight));
-            fill(r,ix,iy+h*0.48f,w,std::max(1.0f,h*0.10f),alpha(shade(base,65),80+g_texture.highlight));
+            for(float yy=iy+1.0f;yy<iy+h-1.0f&&count<int(rects.size());yy+=spacing)rects[count++]={ix+1.0f,yy,w-2.0f,float(thick)};
+            fillBatch(r,rects,count,alpha(shade(base,28+g_texture.contrast/3),70+g_texture.highlight));
+            fill(r,ix+w*0.10f,iy+h*0.18f,w*0.72f,std::max(1.0f,h*0.12f),alpha(shade(base,72),70+g_texture.highlight));
+            fill(r,ix+w*0.22f,iy+h*0.46f,w*0.58f,std::max(1.0f,h*0.10f),alpha(shade(base,58),55+g_texture.contrast));
+            fill(r,ix,iy,1.0f,h,shade(base,32));
+            fill(r,ix+w-1.0f,iy,1.0f,h,shade(base,-35));
+            drawNestedBorder(r,ix,iy,w,h,1,alpha(shade(base,-22),90));
             break;
         }
         case VisualTexture::Pixel:{
-            fill(r,ix,iy,w,h,base);
-            std::array<SDL_FRect,16> rects{};int count=0;
+            fill(r,ix,iy,w,h,shade(base,-8));
+            std::array<SDL_FRect,32> bright{};std::array<SDL_FRect,32> dark{};
+            int bright_count=0,dark_count=0;
             const float ps=float(std::max(2,g_texture.pattern_scale));
             int row=0;
-            for(float yy=iy+1;yy<iy+h-1&&count<int(rects.size());yy+=ps,++row){
+            for(float yy=iy+1.0f;yy<iy+h-1.0f&&(bright_count<int(bright.size())||dark_count<int(dark.size()));yy+=ps,++row){
                 int col=0;
-                for(float xx=ix+1;xx<ix+w-1&&count<int(rects.size());xx+=ps,++col){if(((row+col)&1)==0)rects[count++]={xx,yy,std::min(ps-1,ix+w-xx-1),std::min(ps-1,iy+h-yy-1)};}
+                for(float xx=ix+1.0f;xx<ix+w-1.0f&&(bright_count<int(bright.size())||dark_count<int(dark.size()));xx+=ps,++col){
+                    const float pw=std::min(ps-1.0f,ix+w-xx-1.0f),ph=std::min(ps-1.0f,iy+h-yy-1.0f);
+                    if(pw<=0.0f||ph<=0.0f)continue;
+                    const int pattern=(row*3+col*5)&3;
+                    if(pattern==0&&bright_count<int(bright.size()))bright[bright_count++]={xx,yy,pw,ph};
+                    else if(pattern==1&&dark_count<int(dark.size()))dark[dark_count++]={xx,yy,pw,ph};
+                }
             }
-            fillBatch(r,rects,count,alpha(shade(base,-std::max(8,g_texture.contrast/2)),100+g_texture.contrast));
+            fillBatch(r,bright,bright_count,alpha(shade(base,24+g_texture.contrast/5),110+g_texture.contrast));
+            fillBatch(r,dark,dark_count,alpha(shade(base,-18-g_texture.contrast/3),95+g_texture.contrast));
+            drawNestedBorder(r,ix,iy,w,h,1,alpha(shade(base,-22),85));
             break;
         }
         case VisualTexture::Dots:{
@@ -273,54 +310,64 @@ void drawTexturedCell(SDL_Renderer*r,float x,float y,float size,C base){
             break;
         }
         case VisualTexture::Stripes:{
-            fill(r,ix,iy,w,h,base);
-            std::array<SDL_FRect,32> rects{};int count=0;
+            fill(r,ix,iy,w,h,shade(base,-6));
+            std::array<SDL_FRect,32> light{};std::array<SDL_FRect,32> dark{};int lc=0,dc=0;
             const int spacing=std::max(3,g_texture.spacing),thick=std::clamp(g_texture.line_thickness,1,4);
-            if(g_texture.angle==0){for(float yy=iy;yy<iy+h&&count<int(rects.size());yy+=spacing)rects[count++]={ix,yy,w,float(thick)};}
-            else if(g_texture.angle==2){for(float xx=ix;xx<ix+w&&count<int(rects.size());xx+=spacing)rects[count++]={xx,iy,float(thick),h};}
-            else{
+            if(g_texture.angle==0){
+                for(float yy=iy;yy<iy+h&&lc<int(light.size());yy+=spacing){light[lc++]={ix,yy,w,float(thick)};if(dc<int(dark.size()))dark[dc++]={ix,yy+thick,w,1.0f};}
+            }else if(g_texture.angle==2){
+                for(float xx=ix;xx<ix+w&&lc<int(light.size());xx+=spacing){light[lc++]={xx,iy,float(thick),h};if(dc<int(dark.size()))dark[dc++]={xx+thick,iy,1.0f,h};}
+            }else{
                 const int direction=g_texture.angle==1?1:-1;
                 const int tile=std::max(2,spacing/2);
-                for(int row=0;row<int(h)&&count<int(rects.size());row+=tile){
+                for(int row=0;row<int(h)&&lc<int(light.size());row+=tile){
                     int phase=(direction*row)%spacing;if(phase<0)phase+=spacing;
-                    for(int col=-phase;col<int(w)&&count<int(rects.size());col+=spacing){
-                        const int x0=std::max(0,col);
-                        const int x1=std::min(int(w),col+std::max(1,thick+1));
-                        if(x1>x0)rects[count++]={ix+float(x0),iy+float(row),float(x1-x0),float(std::min(tile,int(h)-row))};
+                    for(int col=-phase;col<int(w)&&lc<int(light.size());col+=spacing){
+                        const int x0=std::max(0,col),x1=std::min(int(w),col+std::max(1,thick+1));
+                        if(x1>x0)light[lc++]={ix+float(x0),iy+float(row),float(x1-x0),float(std::min(tile,int(h)-row))};
                     }
                 }
             }
-            fillBatch(r,rects,count,alpha(shade(base,-10-g_texture.contrast/2),80+g_texture.contrast));
+            fillBatch(r,light,lc,alpha(shade(base,22+g_texture.contrast/4),85+g_texture.contrast));
+            fillBatch(r,dark,dc,alpha(shade(base,-24-g_texture.contrast/3),65+g_texture.contrast/2));
             break;
         }
         case VisualTexture::Grid:{
-            fill(r,ix,iy,w,h,base);
-            std::array<SDL_FRect,24> rects{};int count=0;
+            fill(r,ix,iy,w,h,shade(base,4));
+            std::array<SDL_FRect,32> gutters{};std::array<SDL_FRect,32> highlights{};int gc=0,hc=0;
             const int step=std::max(3,g_texture.grid_size),thick=std::clamp(g_texture.line_thickness,1,4);
-            for(float xx=ix+step;xx<ix+w&&count<int(rects.size());xx+=step)rects[count++]={xx,iy,float(thick),h};
-            for(float yy=iy+step;yy<iy+h&&count<int(rects.size());yy+=step)rects[count++]={ix,yy,w,float(thick)};
-            fillBatch(r,rects,count,alpha(shade(base,-15-g_texture.contrast/2),90+g_texture.contrast));
+            for(float xx=ix+step;xx<ix+w&&gc<int(gutters.size());xx+=step){
+                gutters[gc++]={xx,iy,float(thick),h};
+                if(hc<int(highlights.size())&&xx+thick<ix+w)highlights[hc++]={xx+thick,iy,1.0f,h};
+            }
+            for(float yy=iy+step;yy<iy+h&&gc<int(gutters.size());yy+=step){
+                gutters[gc++]={ix,yy,w,float(thick)};
+                if(hc<int(highlights.size())&&yy+thick<iy+h)highlights[hc++]={ix,yy+thick,w,1.0f};
+            }
+            fillBatch(r,gutters,gc,alpha(shade(base,-32-g_texture.contrast/4),95+g_texture.contrast));
+            fillBatch(r,highlights,hc,alpha(shade(base,35+g_texture.contrast/5),45+g_texture.contrast/2));
+            drawNestedBorder(r,ix,iy,w,h,1,alpha(shade(base,-20),90));
             break;
         }
-        case VisualTexture::Wireframe:
-            fill(r,ix,iy,w,h,alpha(shade(base,-70),90));
+        case VisualTexture::Wireframe:{
+            const int interior_alpha=std::clamp(125-g_texture.transparency,35,135);
+            fill(r,ix,iy,w,h,alpha(shade(base,-45-g_texture.inner_darken/2),interior_alpha));
             drawNestedBorder(r,ix,iy,w,h,border,edge);
+            if(w>8.0f&&h>8.0f){
+                const float inset=float(border)+1.0f;
+                if(w>inset*2.0f+1.0f&&h>inset*2.0f+1.0f)drawNestedBorder(r,ix+inset,iy+inset,w-inset*2.0f,h-inset*2.0f,1,alpha(shade(base,55),75+g_texture.edge_light));
+                if(g_texture.transparency<45){
+                    const float brace=std::max(1.0f,float(border-1));
+                    fill(r,ix+w*0.5f-brace*0.5f,iy+inset,brace,h-inset*2.0f,alpha(edge,70+g_texture.edge_light));
+                    fill(r,ix+inset,iy+h*0.5f-brace*0.5f,w-inset*2.0f,brace,alpha(edge,70+g_texture.edge_light));
+                }
+            }
             break;
+        }
         case VisualTexture::Outline:
             fill(r,ix,iy,w,h,inner);
             drawNestedBorder(r,ix,iy,w,h,border,base);
             break;
-        case VisualTexture::Hollow:
-            fill(r,ix,iy,w,h,alpha(shade(base,-80),55));
-            drawNestedBorder(r,ix,iy,w,h,border,edge);
-            break;
-        case VisualTexture::Raised:{
-            fill(r,ix,iy,w,h,base);
-            const float d=std::clamp(1.0f+w*(g_texture.depth/100.0f)*0.14f,1.0f,std::max(1.0f,w*0.20f));
-            fill(r,ix,iy,w,d,hi);fill(r,ix,iy,d,h,hi);fill(r,ix,iy+h-d,w,d,sh);fill(r,ix+w-d,iy,d,h,sh);
-            fill(r,ix+d,iy+d,w-2*d,h-2*d,shade(base,8));
-            break;
-        }
         case VisualTexture::Recessed:{
             fill(r,ix,iy,w,h,base);
             const float d=std::clamp(1.0f+w*(g_texture.depth/100.0f)*0.14f,1.0f,std::max(1.0f,w*0.20f));
@@ -435,7 +482,6 @@ bool shaderNeedsFrameTexture(VisualShader shader){
         case VisualShader::LCD:
         case VisualShader::DotMatrix:
         case VisualShader::Bloom:
-        case VisualShader::Phosphor:
         case VisualShader::Analog:
         case VisualShader::Chromatic:
         case VisualShader::Ghosting:
@@ -444,14 +490,13 @@ bool shaderNeedsFrameTexture(VisualShader shader){
         case VisualShader::None:
         case VisualShader::Scanlines:
         case VisualShader::Vignette:
-        case VisualShader::PixelGrid:
         default:
             return false;
     }
 }
 
 bool shaderNeedsHistory(VisualShader shader){
-    return shader==VisualShader::Terminal||shader==VisualShader::Phosphor||shader==VisualShader::Ghosting;
+    return shader==VisualShader::Terminal||shader==VisualShader::Ghosting;
 }
 
 void destroyTexture(SDL_Texture*& texture){
@@ -827,9 +872,6 @@ void applySimpleOverlayShader(SDL_Renderer*r,int w,int h){
         case VisualShader::Vignette:
             applyVignette(r,w,h,effectAlpha(100,145),g_shader.radius,g_shader.softness);
             break;
-        case VisualShader::PixelGrid:
-            applyPixelGrid(r,w,h,g_shader.grid_size,g_shader.line_thickness,effectAlpha(100,80));
-            break;
         default:
             break;
     }
@@ -888,19 +930,16 @@ void applyVisualShader(SDL_Renderer*r){
         case VisualShader::Terminal:
             renderTextureCopy(r,g_post.frame,nullptr,nullptr,SDL_BLENDMODE_NONE,255);
             renderBloom(r,w,h,g_shader.glow,35+g_shader.glow/2,55,45,{155,255,180,255});
-            renderHistoryTrail(r,w,h,g_shader.persistence,2+g_shader.persistence/30,{140,255,175,255});
+            renderHistoryTrail(r,w,h,g_shader.persistence,g_shader.trail_length,{140,255,175,255});
             applyScanlines(r,w,h,4,1,effectAlpha(g_shader.scanlines,90));
             applyFlicker(r,w,h,effectAlpha(g_shader.flicker,95));
             updateHistory(r,g_shader.persistence);
             break;
         case VisualShader::LCD:{
             renderTextureCopy(r,g_post.frame,nullptr,nullptr,SDL_BLENDMODE_NONE,255);
-            if(g_shader.sharpness<100){
-                const int softness=100-g_shader.sharpness;
-                applySoftness(r,w,h,softness);
-            }
-            applyPixelGrid(r,w,h,g_shader.grid_size,1,effectAlpha(g_shader.pixel_grid,75));
-            applyLcdSubpixels(r,w,h,effectAlpha(g_shader.subpixel,60),g_shader.grid_size);
+            if(g_shader.softness>0)applySoftness(r,w,h,g_shader.softness);
+            if(g_shader.pixel_grid>0)applyPixelGrid(r,w,h,g_shader.grid_size,g_shader.line_thickness,effectAlpha(g_shader.pixel_grid,75));
+            if(g_shader.subpixel>0)applyLcdSubpixels(r,w,h,effectAlpha(g_shader.subpixel,60),g_shader.grid_size);
             break;
         }
         case VisualShader::DotMatrix:
@@ -913,16 +952,8 @@ void applyVisualShader(SDL_Renderer*r){
             renderTextureCopy(r,g_post.frame,nullptr,nullptr,SDL_BLENDMODE_NONE,255);
             renderBloom(r,w,h,100,g_shader.radius,g_shader.softness,g_shader.threshold);
             break;
-        case VisualShader::Phosphor:
-            renderTextureCopy(r,g_post.frame,nullptr,nullptr,SDL_BLENDMODE_NONE,255);
-            renderBloom(r,w,h,g_shader.glow,45+g_shader.glow/2,65,42,{145,255,180,255});
-            renderHistoryTrail(r,w,h,g_shader.persistence,g_shader.trail_length,{135,255,175,255});
-            applyScanlines(r,w,h,4,1,effectAlpha(g_shader.scanlines,80));
-            updateHistory(r,g_shader.persistence);
-            break;
         case VisualShader::Scanlines:
         case VisualShader::Vignette:
-        case VisualShader::PixelGrid:
             renderTextureCopy(r,g_post.frame,nullptr,nullptr,SDL_BLENDMODE_NONE,255);
             applySimpleOverlayShader(r,w,h);
             break;
@@ -1413,19 +1444,17 @@ void renderTextureSettings(SDL_Renderer*r,const AppConfig&cfg,int sel){
     switch(cfg.texture){
         case VisualTexture::Default:desc="Original FasTris blocks with the classic top highlight.";break;
         case VisualTexture::Flat:desc="Fastest minimalist solid-cell rendering.";break;
-        case VisualTexture::Beveled:desc="Hard bevel with independent depth, highlight, shadow and border.";break;
-        case VisualTexture::SoftBevel:desc="Softer layered bevel for gentler dimensional blocks.";break;
-        case VisualTexture::Glass:desc="Transparent glass body, reflection band, lit edge and dark interior.";break;
+        case VisualTexture::Beveled:desc="Bevel + raised face with depth, border and softness controls.";break;
+        case VisualTexture::SoftBevel:desc="Soft layered bevel with a pillow-like center sheen.";break;
+        case VisualTexture::Glass:desc="Layered translucent glass with reflections and lit edges.";break;
         case VisualTexture::Neon:desc="Dark interior with bright configurable glowing-style edges.";break;
-        case VisualTexture::Metallic:desc="Metal panel bands and highlights with adjustable contrast.";break;
-        case VisualTexture::Pixel:desc="Chunky checker/pixel surface generated inside each occupied cell.";break;
+        case VisualTexture::Metallic:desc="Brushed metal with bands, streaks and rim shading.";break;
+        case VisualTexture::Pixel:desc="Bounded mosaic pixels with bright and dark micro-cells.";break;
         case VisualTexture::Dots:desc="Batched dot pattern; spacing and size stay bounded for fast rendering.";break;
-        case VisualTexture::Stripes:desc="Horizontal, vertical or diagonal procedural stripe pattern.";break;
-        case VisualTexture::Grid:desc="Subdivided cell grid with adjustable size, thickness and contrast.";break;
-        case VisualTexture::Wireframe:desc="Mostly dark cell interior with a bright structural frame.";break;
+        case VisualTexture::Stripes:desc="Directional stripe bands with a subtle trailing shadow.";break;
+        case VisualTexture::Grid:desc="Inset panel grid with dark gutters and edge highlights.";break;
+        case VisualTexture::Wireframe:desc="Wireframe / hollow shell with adjustable center opacity.";break;
         case VisualTexture::Outline:desc="Filled dark center plus a strong piece-colored outline.";break;
-        case VisualTexture::Hollow:desc="Nearly empty center with a bright configurable frame.";break;
-        case VisualTexture::Raised:desc="Embossed tile with raised lighting direction.";break;
         case VisualTexture::Recessed:desc="Inset/debossed tile with reversed edge lighting.";break;
         case VisualTexture::Arcade:desc="Chunky cabinet-style bevel with bright specular accent.";break;
         case VisualTexture::RetroLCD:desc="Segmented LCD-like dot/cell structure inside each tetromino cell.";break;
@@ -1470,17 +1499,15 @@ void renderShaderSettings(SDL_Renderer*r,const AppConfig&cfg,int sel){
     switch(cfg.shader){
         case VisualShader::None: desc1="Clean default output with no post-processing.";desc2="Choose another shader to reveal its own controls.";break;
         case VisualShader::CRT: desc1="CRT exposes scanlines, spacing, glow, true image curvature, vignette and softness.";desc2="Curvature warps the rendered frame itself instead of painting fake dark corners.";break;
-        case VisualShader::Terminal: desc1="Terminal exposes scanlines, glow, phosphor persistence and flicker.";desc2="Pairs naturally with Hacker or Amber palettes.";break;
-        case VisualShader::LCD: desc1="LCD exposes pixel grid, grid size, subpixel strength and sharpness.";desc2="Useful for a crisp flat-panel / handheld display look.";break;
+        case VisualShader::Terminal: desc1="Terminal combines the old Terminal and Phosphor effects.";desc2="Glow, trails, scanlines and flicker now share one shader.";break;
+        case VisualShader::LCD: desc1="LCD combines the old LCD and Pixel Grid effects.";desc2="Set Subpixel or Softness to 0 to disable either effect.";break;
         case VisualShader::DotMatrix: desc1="Dot Matrix exposes dot size, spacing and dot brightness.";desc2="The pattern can range from fine texture to chunky matrix cells.";break;
         case VisualShader::Bloom: desc1="Bloom exposes radius, threshold and softness.";desc2="Higher softness spreads the glow; threshold controls how restrained it feels.";break;
-        case VisualShader::Phosphor: desc1="Phosphor exposes glow, persistence, trail length and scanlines.";desc2="Use persistence and trail length for stronger old-display afterimage flavor.";break;
         case VisualShader::Scanlines: desc1="Scanlines exposes spacing and line thickness.";desc2="A lightweight display effect with no extra CRT treatment.";break;
         case VisualShader::Vignette: desc1="Vignette exposes radius and softness.";desc2="Lower radius makes the darkened edge region reach further inward.";break;
         case VisualShader::Analog: desc1="Analog exposes noise, flicker, horizontal jitter and distortion.";desc2="Keep values low for subtle instability or push them for a damaged signal look.";break;
         case VisualShader::Chromatic: desc1="Chromatic exposes RGB offset and direction.";desc2="Direction cycles horizontal, vertical and two diagonal variants.";break;
         case VisualShader::Ghosting: desc1="Ghosting exposes persistence and trail length.";desc2="Higher values make the display afterimage treatment more obvious.";break;
-        case VisualShader::PixelGrid: desc1="Pixel Grid exposes grid size and line thickness.";desc2="Use larger cells for a stronger panel / pixel-display structure.";break;
         case VisualShader::Arcade: desc1="Arcade exposes its bloom, scanlines, vignette and pixel-grid mix.";desc2="Tune the four components independently while Strength controls the whole effect.";break;
         default:break;
     }
