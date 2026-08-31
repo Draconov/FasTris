@@ -56,10 +56,11 @@ inline constexpr int kControlItemCount = kControlResetIndex + 1;
 inline constexpr int kMiscShadersIndex = 0;
 inline constexpr int kMiscTexturesIndex = 1;
 inline constexpr int kMiscPalettesIndex = 2;
-inline constexpr int kMiscResetGraphicsIndex = 3;
-inline constexpr int kMiscItemCount = 4;
+inline constexpr int kMiscPalettePiecesIndex = 3;
+inline constexpr int kMiscResetGraphicsIndex = 4;
+inline constexpr int kMiscItemCount = 5;
 
-void setVisualPalette(VisualPalette palette);
+void setVisualPalette(VisualPalette palette, bool affects_pieces);
 void setVisualTexture(const AppConfig& cfg);
 void setVisualShader(const AppConfig& cfg);
 void beginVisualShaderFrame(SDL_Renderer* r);

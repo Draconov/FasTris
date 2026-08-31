@@ -1687,6 +1687,10 @@ struct AppState {
                     settings_status.clear();
                     palette_sel=static_cast<int>(cfg.palette);
                     screen=Screen::Palettes;
+                }else if((key==SDLK_RETURN||key==SDLK_KP_ENTER||key==SDLK_LEFT||key==SDLK_RIGHT)&&misc_sel==kMiscPalettePiecesIndex){
+                    cfg.palette_affects_pieces=!cfg.palette_affects_pieces;
+                    saveConfig(config_path,cfg);
+                    settings_status=cfg.palette_affects_pieces?"PIECE RECOLORING ON":"PIECE RECOLORING OFF";
                 }else if((key==SDLK_RETURN||key==SDLK_KP_ENTER)&&misc_sel==kMiscResetGraphicsIndex){
                     resetGraphics(cfg);
                     shutdownVisualShaderPipeline();
@@ -1744,14 +1748,19 @@ struct AppState {
         if(screen==Screen::Palettes){
             if(ev.type==SDL_EVENT_KEY_DOWN&&!ev.key.repeat){
                 const auto key=ev.key.key;
+                constexpr int palette_rows=5;
                 if(key==SDLK_ESCAPE||key==SDLK_RETURN||key==SDLK_KP_ENTER){
                     screen=Screen::Miscellaneous;
-                }else if(key==SDLK_UP||key==SDLK_LEFT){
-                    palette_sel=(palette_sel+kVisualPaletteCount-1)%kVisualPaletteCount;
+                }else if(key==SDLK_UP||key==SDLK_DOWN){
+                    const int column=palette_sel/palette_rows;
+                    int row=palette_sel%palette_rows;
+                    row=(row+(key==SDLK_UP?palette_rows-1:1))%palette_rows;
+                    const int candidate=column*palette_rows+row;
+                    if(candidate<kVisualPaletteCount)palette_sel=candidate;
                     cfg.palette=static_cast<VisualPalette>(palette_sel);
                     saveConfig(config_path,cfg);
-                }else if(key==SDLK_DOWN||key==SDLK_RIGHT){
-                    palette_sel=(palette_sel+1)%kVisualPaletteCount;
+                }else if(key==SDLK_LEFT||key==SDLK_RIGHT){
+                    palette_sel=(palette_sel+palette_rows)%kVisualPaletteCount;
                     cfg.palette=static_cast<VisualPalette>(palette_sel);
                     saveConfig(config_path,cfg);
                 }
@@ -1891,7 +1900,7 @@ struct AppState {
         processWebReplayDecode();
 #endif
         processSeedClipboard();
-        setVisualPalette(cfg.palette);
+        setVisualPalette(cfg.palette,cfg.palette_affects_pieces);
         setVisualTexture(cfg);
         setVisualShader(cfg);
         beginVisualShaderFrame(ren);

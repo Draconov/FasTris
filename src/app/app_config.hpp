@@ -13,6 +13,11 @@ enum class VisualPalette : int {
     Amber,
     BlackWhite,
     MintBlue,
+    LofiWarm,
+    LofiCool,
+    PastelBlue,
+    Halloween,
+    SunsetSunrise,
     Count
 };
 
@@ -120,6 +125,7 @@ struct AppConfig {
     int fps_cap{480}; // 0 = uncapped
 
     VisualPalette palette{VisualPalette::Default};
+    bool palette_affects_pieces{true};
     VisualShader shader{VisualShader::None};
     VisualTexture texture{VisualTexture::Default};
 

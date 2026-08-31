@@ -18,6 +18,8 @@ struct Canvas { float w{960.0f}; float h{720.0f}; float scale{1.0f}; };
 float g_offset_x = 0.0f;
 float g_offset_y = 0.0f;
 VisualPalette g_visual_palette = VisualPalette::Default;
+bool g_palette_affects_pieces = true;
+bool g_palette_transform_enabled = true;
 struct TextureRuntime {
     VisualTexture mode{VisualTexture::Default};
     int cell_gap{2};
@@ -99,8 +101,20 @@ struct PostProcessRuntime {
 PostProcessRuntime g_post{};
 
 Uint8 clampByte(int value){return static_cast<Uint8>(std::clamp(value,0,255));}
+Uint8 lerpByte(Uint8 a,Uint8 b,int t,int scale){
+    t=std::clamp(t,0,scale);
+    return clampByte((int(a)*(scale-t)+int(b)*t+scale/2)/scale);
+}
+C gradientPalette(C low,C mid,C high,int luminance,Uint8 alpha_value){
+    if(luminance<=127){
+        const int t=luminance*255/127;
+        return {lerpByte(low.r,mid.r,t,255),lerpByte(low.g,mid.g,t,255),lerpByte(low.b,mid.b,t,255),alpha_value};
+    }
+    const int t=(luminance-128)*255/127;
+    return {lerpByte(mid.r,high.r,t,255),lerpByte(mid.g,high.g,t,255),lerpByte(mid.b,high.b,t,255),alpha_value};
+}
 C paletteColor(C c){
-    if(g_visual_palette==VisualPalette::Default)return c;
+    if(!g_palette_transform_enabled||g_visual_palette==VisualPalette::Default)return c;
     const int y=(54*int(c.r)+183*int(c.g)+19*int(c.b)+128)>>8;
     switch(g_visual_palette){
         case VisualPalette::Hacker:
@@ -111,6 +125,16 @@ C paletteColor(C c){
             return {static_cast<Uint8>(y),static_cast<Uint8>(y),static_cast<Uint8>(y),c.a};
         case VisualPalette::MintBlue:
             return {clampByte(y*48/100),clampByte(y*100/100),clampByte(y*112/100),c.a};
+        case VisualPalette::LofiWarm:
+            return gradientPalette({29,24,23,255},{169,102,75,255},{232,211,169,255},y,c.a);
+        case VisualPalette::LofiCool:
+            return gradientPalette({21,27,38,255},{104,132,157,255},{205,216,198,255},y,c.a);
+        case VisualPalette::PastelBlue:
+            return gradientPalette({25,38,56,255},{126,180,217,255},{220,239,248,255},y,c.a);
+        case VisualPalette::Halloween:
+            return gradientPalette({24,8,33,255},{185,58,14,255},{255,184,61,255},y,c.a);
+        case VisualPalette::SunsetSunrise:
+            return gradientPalette({25,20,66,255},{226,88,102,255},{255,207,126,255},y,c.a);
         default:
             return c;
     }
@@ -140,6 +164,12 @@ C color(Piece p){switch(p){case Piece::I:return{60,210,230,255};case Piece::J:re
 void set(SDL_Renderer*r,C c){c=paletteColor(c);SDL_SetRenderDrawColor(r,c.r,c.g,c.b,c.a);}
 void fill(SDL_Renderer*r,float x,float y,float w,float h,C c){set(r,c);SDL_FRect q{x+g_offset_x,y+g_offset_y,w,h};SDL_RenderFillRect(r,&q);}
 void outline(SDL_Renderer*r,float x,float y,float w,float h,C c){set(r,c);SDL_FRect q{x+g_offset_x,y+g_offset_y,w,h};SDL_RenderRect(r,&q);}
+void outlinePiece(SDL_Renderer*r,float x,float y,float w,float h,C c){
+    const bool previous=g_palette_transform_enabled;
+    g_palette_transform_enabled=g_palette_affects_pieces;
+    outline(r,x,y,w,h,c);
+    g_palette_transform_enabled=previous;
+}
 void txt(SDL_Renderer*r,float x,float y,const std::string&s,C c={220,225,232,255},bool big=false){
     set(r,c);
     const float px=x+g_offset_x,py=y+g_offset_y;
@@ -182,6 +212,8 @@ void drawNestedBorder(SDL_Renderer*r,float x,float y,float w,float h,int thickne
 }
 
 void drawTexturedCell(SDL_Renderer*r,float x,float y,float size,C base){
+    const bool previous_palette_transform=g_palette_transform_enabled;
+    g_palette_transform_enabled=g_palette_affects_pieces;
     const int max_gap=std::max(0,std::min(6,int(size)-4));
     const float gap=float(std::clamp(g_texture.cell_gap,0,max_gap));
     const float ix=x+gap*0.5f,iy=y+gap*0.5f;
@@ -400,15 +432,17 @@ void drawTexturedCell(SDL_Renderer*r,float x,float y,float size,C base){
             fill(r,ix,iy,w,h,base);
             break;
     }
+    g_palette_transform_enabled=previous_palette_transform;
 }
 
 void drawMini(SDL_Renderer*r,Piece p,float ox,float oy,float s){if(p==Piece::None)return;auto bs=blocks(p,Rotation::Spawn);int minx=4,maxx=0,miny=4,maxy=0;for(auto b:bs){minx=std::min(minx,b.x);maxx=std::max(maxx,b.x);miny=std::min(miny,b.y);maxy=std::max(maxy,b.y);}float cx=ox-(minx+maxx+1)*s/2.0f,cy=oy-(miny+maxy+1)*s/2.0f;for(auto b:bs)drawTexturedCell(r,cx+b.x*s,cy+b.y*s,s,color(p));}
 void actionLabel(SDL_Renderer*r,float x,float y,const ReplayEvent&e){std::string s=std::string(e.down?"+":"-")+std::string(actionName(e.action));txt(r,x,y,s,{150,160,175,255});}
 }
 
-void setVisualPalette(VisualPalette palette){
+void setVisualPalette(VisualPalette palette,bool affects_pieces){
     const int value=std::clamp(static_cast<int>(palette),0,kVisualPaletteCount-1);
     g_visual_palette=static_cast<VisualPalette>(value);
+    g_palette_affects_pieces=affects_pieces;
 }
 
 void setVisualTexture(const AppConfig& cfg){
@@ -1012,7 +1046,7 @@ void renderGame(SDL_Renderer*r,Game&g,const RenderInfo&i){
     fill(r,bx,by,board_w,board_h,{14,18,24,255});
     for(int yy=0;yy<kVisibleH;++yy)for(int x=0;x<kBoardW;++x){int y=yy+kHiddenH;auto p=g.board().cell(x,y);if(p!=Piece::None)drawTexturedCell(r,bx+x*cell,by+yy*cell,cell,color(p));}
     if(g.active().piece!=Piece::None){
-        if(g.rules().ghost){auto a=g.active();a.y=g.ghostY();for(auto b:blocks(a.piece,a.rot)){int y=a.y+b.y-kHiddenH;if(y>=0){auto c=color(a.piece);c.a=85;outline(r,bx+(a.x+b.x)*cell+3,by+y*cell+3,cell-6,cell-6,c);}}}
+        if(g.rules().ghost){auto a=g.active();a.y=g.ghostY();for(auto b:blocks(a.piece,a.rot)){int y=a.y+b.y-kHiddenH;if(y>=0){auto c=color(a.piece);c.a=85;outlinePiece(r,bx+(a.x+b.x)*cell+3,by+y*cell+3,cell-6,cell-6,c);}}}
         auto&a=g.active();for(auto b:blocks(a.piece,a.rot)){int y=a.y+b.y-kHiddenH;if(y>=0&&y<kVisibleH)drawTexturedCell(r,bx+(a.x+b.x)*cell,by+y*cell,cell,color(a.piece));}
     }
     txt(r,bx,by-38,"FASTRIS",{235,240,248,255},true);
@@ -1354,91 +1388,126 @@ void renderMiscellaneous(SDL_Renderer*r,const AppConfig&cfg,int sel,const std::s
     beginCanvas(r,true);
     set(r,{11,14,20,255});SDL_RenderClear(r);
     txt(r,300,48,"MISCELLANEOUS",{235,240,248,255},true);
-    txt(r,265,125,"GRAPHICS",{145,155,170,255},true);
+    txt(r,265,112,"GRAPHICS",{145,155,170,255},true);
 
-    const std::array<std::string,kMiscItemCount> items={"SHADERS","TEXTURES","PALETTES","RESET GRAPHICS"};
+    const std::array<std::string,kMiscItemCount> items={
+        "SHADERS","TEXTURES","PALETTES","PALETTE AFFECTS PIECES","RESET GRAPHICS"};
     for(int n=0;n<kMiscItemCount;++n){
-        const float y=180.0f+n*64.0f;
+        const float y=160.0f+n*58.0f;
         const C normal=n==kMiscResetGraphicsIndex?C{245,180,110,255}:C{210,215,225,255};
         txt(r,265,y,(n==sel?"> ":"  ")+items[n],n==sel?C{120,220,255,255}:normal,true);
-        if(n==kMiscShadersIndex)txt(r,500,y+4,shaderName(cfg.shader),{155,205,220,255});
-        else if(n==kMiscTexturesIndex)txt(r,500,y+4,textureName(cfg.texture),{155,205,220,255});
-        else if(n==kMiscPalettesIndex)txt(r,500,y+4,paletteName(cfg.palette),{155,205,220,255});
+        if(n==kMiscShadersIndex)txt(r,555,y+4,shaderName(cfg.shader),{155,205,220,255});
+        else if(n==kMiscTexturesIndex)txt(r,555,y+4,textureName(cfg.texture),{155,205,220,255});
+        else if(n==kMiscPalettesIndex)txt(r,555,y+4,paletteName(cfg.palette),{155,205,220,255});
+        else if(n==kMiscPalettePiecesIndex)txt(r,555,y+4,cfg.palette_affects_pieces?"ON":"OFF",
+                                               cfg.palette_affects_pieces?C{125,220,170,255}:C{235,150,125,255});
     }
 
-    txt(r,265,455,"Reset Graphics restores every shader, texture and palette parameter.",{155,168,185,255});
-    txt(r,265,483,"It does not change controls, handling, FPS, VSYNC, seeds or gameplay rules.",{155,168,185,255});
-    if(sel==kMiscShadersIndex)txt(r,265,535,"ENTER open shader settings",{150,205,220,255},true);
-    else if(sel==kMiscTexturesIndex)txt(r,265,535,"ENTER open procedural texture settings",{150,205,220,255},true);
-    else if(sel==kMiscPalettesIndex)txt(r,265,535,"ENTER open palette settings",{150,205,220,255},true);
-    else txt(r,265,535,"ENTER restore all graphics presentation defaults",{245,180,110,255},true);
-    if(!status.empty())txt(r,265,575,status,{255,205,100,255},true);
-    txt(r,265,625,"UP/DOWN select   ENTER open/apply   ESC back to Settings",{135,145,160,255});
+    txt(r,265,470,"Palette Affects Pieces OFF keeps the classic tetromino colors",{155,168,185,255});
+    txt(r,265,494,"while the selected palette still recolors menus and other presentation UI.",{155,168,185,255});
+    if(sel==kMiscShadersIndex)txt(r,265,545,"ENTER open shader settings",{150,205,220,255},true);
+    else if(sel==kMiscTexturesIndex)txt(r,265,545,"ENTER open procedural texture settings",{150,205,220,255},true);
+    else if(sel==kMiscPalettesIndex)txt(r,265,545,"ENTER open palette settings",{150,205,220,255},true);
+    else if(sel==kMiscPalettePiecesIndex)txt(r,265,545,"ENTER or LEFT/RIGHT toggle piece recoloring",{150,205,220,255},true);
+    else txt(r,265,545,"ENTER restore all graphics presentation defaults",{245,180,110,255},true);
+    if(!status.empty())txt(r,265,585,status,{255,205,100,255},true);
+    txt(r,265,630,"UP/DOWN select   ENTER open/toggle   ESC back to Settings",{135,145,160,255});
 }
 
 void renderPaletteSettings(SDL_Renderer*r,const AppConfig&cfg,int sel){
     beginCanvas(r,true);
     set(r,{11,14,20,255});SDL_RenderClear(r);
-    txt(r,330,48,"PALETTES",{235,240,248,255},true);
-    txt(r,248,88,"UP/DOWN previews and applies immediately",{145,155,170,255});
+    txt(r,330,34,"PALETTES",{235,240,248,255},true);
+    txt(r,210,76,"Ten presentation palettes. Changes preview and apply immediately.",{145,155,170,255});
 
+    constexpr int rows=5;
+    constexpr float box_w=330.0f;
+    constexpr float box_h=58.0f;
+    constexpr float left_x=125.0f;
+    constexpr float right_x=505.0f;
+    constexpr float first_y=125.0f;
+    constexpr float row_step=75.0f;
     for(int n=0;n<kVisualPaletteCount;++n){
         const auto palette=static_cast<VisualPalette>(n);
         const bool active=palette==cfg.palette;
         const bool selected=n==sel;
-        const float y=150.0f+n*82.0f;
-        if(selected)fill(r,225,y-11,510,58,{20,27,37,255});
-        outline(r,225,y-11,510,58,selected?C{120,220,255,255}:C{45,55,70,255});
-        txt(r,248,y,(selected?"> ":"  ")+std::string(paletteName(palette)),selected?C{120,220,255,255}:C{210,215,225,255},true);
-        if(active)txt(r,610,y+4,"ACTIVE",{125,220,170,255});
+        const int column=n/rows;
+        const int row=n%rows;
+        const float x=column==0?left_x:right_x;
+        const float y=first_y+row*row_step;
+        if(selected)fill(r,x,y-10,box_w,box_h,{20,27,37,255});
+        outline(r,x,y-10,box_w,box_h,selected?C{120,220,255,255}:C{45,55,70,255});
+        txt(r,x+20,y+1,(selected?"> ":"  ")+std::string(paletteName(palette)),selected?C{120,220,255,255}:C{210,215,225,255},true);
+        if(active)txt(r,x+245,y+5,"ACTIVE",{125,220,170,255});
     }
 
-    txt(r,235,585,"HACKER: green terminal   AMBER: warm Fallout-style terminal",{155,168,185,255});
-    txt(r,235,612,"BLACK & WHITE: monochrome   MINT BLUE: cool mint/cyan",{155,168,185,255});
-    txt(r,235,650,"UP/DOWN or LEFT/RIGHT choose   ENTER/ESC back",{135,145,160,255});
+    txt(r,155,535,"LO-FI WARM / COOL: muted low-contrast palettes",{155,168,185,255});
+    txt(r,155,560,"PASTEL BLUE: soft icy blue   HALLOWEEN: purple, orange and pumpkin",{155,168,185,255});
+    txt(r,155,585,"SUNSET / SUNRISE: deep violet through coral into warm gold",{155,168,185,255});
+    txt(r,155,612,cfg.palette_affects_pieces?"Piece recoloring: ON":"Piece recoloring: OFF (classic tetromino colors)",
+        cfg.palette_affects_pieces?C{125,220,170,255}:C{235,180,125,255});
+    txt(r,155,650,"UP/DOWN rows   LEFT/RIGHT columns   ENTER/ESC back",{135,145,160,255});
 }
-
 
 void renderTextureSettings(SDL_Renderer*r,const AppConfig&cfg,int sel){
     beginCanvas(r,true);
     set(r,{11,14,20,255});SDL_RenderClear(r);
     txt(r,330,24,"TEXTURES",{235,240,248,255},true);
-    txt(r,202,62,"Procedural block textures change instantly and stay independent of palettes/shaders.",{145,155,170,255});
+    txt(r,165,62,"Texture controls stay on the left; the live preview has its own unobstructed panel.",{145,155,170,255});
 
     const auto controls=textureControls(cfg.texture);
     const int back_index=static_cast<int>(controls.size())+1;
     const int item_count=back_index+1;
-    const float first_y=102.0f;
-    const float available_h=400.0f;
-    const float step=std::clamp(available_h/std::max(1,item_count),38.0f,54.0f);
+    const float first_y=108.0f;
+    const float available_h=420.0f;
+    const float step=std::clamp(available_h/std::max(1,item_count),40.0f,54.0f);
     const float frame_h=std::min(44.0f,step-3.0f);
+    constexpr float controls_x=70.0f;
+    constexpr float controls_w=500.0f;
 
     auto drawRow=[&](int index,const std::string&label,const std::string&value,bool accent=false){
         const float y=first_y+step*index;
         const bool selected=index==sel;
-        if(selected)fill(r,190,y-7,580,frame_h,{20,27,37,255});
-        outline(r,190,y-7,580,frame_h,selected?C{120,220,255,255}:C{45,55,70,255});
+        if(selected)fill(r,controls_x,y-7,controls_w,frame_h,{20,27,37,255});
+        outline(r,controls_x,y-7,controls_w,frame_h,selected?C{120,220,255,255}:C{45,55,70,255});
         const C label_color=selected?C{120,220,255,255}:accent?C{245,180,110,255}:C{210,215,225,255};
-        txt(r,212,y+5,(selected?"> ":"  ")+label,label_color,true);
-        if(!value.empty())txt(r,585,y+8,value,selected?C{150,230,255,255}:C{155,205,220,255});
+        txt(r,controls_x+20,y+5,(selected?"> ":"  ")+label,label_color,true);
+        if(!value.empty())txt(r,controls_x+350,y+8,value,selected?C{150,230,255,255}:C{155,205,220,255});
     };
 
     drawRow(0,"TEXTURE",textureName(cfg.texture));
-    for(std::size_t i=0;i<controls.size();++i)drawRow(static_cast<int>(i)+1,textureControlName(controls[i]),textureControlValueText(cfg,controls[i]));
+    for(std::size_t i=0;i<controls.size();++i)
+        drawRow(static_cast<int>(i)+1,textureControlName(controls[i]),textureControlValueText(cfg,controls[i]));
     drawRow(back_index,"BACK","",true);
 
-    // Live preview uses the exact same cell renderer as gameplay and hold/next.
-    const float preview_y=535.0f;
-    txt(r,195,preview_y-24,"LIVE PREVIEW",{145,155,170,255},true);
-    const float ps=28.0f;
-    drawTexturedCell(r,345,preview_y,ps,color(Piece::T));
-    drawTexturedCell(r,345+ps,preview_y,ps,color(Piece::T));
-    drawTexturedCell(r,345+ps*2,preview_y,ps,color(Piece::T));
-    drawTexturedCell(r,345+ps,preview_y-ps,ps,color(Piece::T));
-    drawTexturedCell(r,490,preview_y-ps,ps,color(Piece::I));
-    drawTexturedCell(r,490,preview_y,ps,color(Piece::I));
-    drawTexturedCell(r,490,preview_y+ps,ps,color(Piece::I));
-    drawTexturedCell(r,490,preview_y+ps*2,ps,color(Piece::I));
+    // Dedicated preview card: rows can never draw over this region.
+    constexpr float panel_x=600.0f;
+    constexpr float panel_y=104.0f;
+    constexpr float panel_w=290.0f;
+    constexpr float panel_h=430.0f;
+    fill(r,panel_x,panel_y,panel_w,panel_h,{14,19,27,255});
+    outline(r,panel_x,panel_y,panel_w,panel_h,{58,72,90,255});
+    txt(r,panel_x+28,panel_y+24,"LIVE PREVIEW",{145,155,170,255},true);
+    fill(r,panel_x+20,panel_y+68,panel_w-40,panel_h-110,{8,11,16,255});
+    outline(r,panel_x+20,panel_y+68,panel_w-40,panel_h-110,{42,53,68,255});
+
+    const float ps=34.0f;
+    const float tx=panel_x+42.0f;
+    const float ty=panel_y+190.0f;
+    drawTexturedCell(r,tx,ty,ps,color(Piece::T));
+    drawTexturedCell(r,tx+ps,ty,ps,color(Piece::T));
+    drawTexturedCell(r,tx+ps*2,ty,ps,color(Piece::T));
+    drawTexturedCell(r,tx+ps,ty-ps,ps,color(Piece::T));
+
+    const float ix=panel_x+202.0f;
+    const float iy=panel_y+142.0f;
+    drawTexturedCell(r,ix,iy,ps,color(Piece::I));
+    drawTexturedCell(r,ix,iy+ps,ps,color(Piece::I));
+    drawTexturedCell(r,ix,iy+ps*2,ps,color(Piece::I));
+    drawTexturedCell(r,ix,iy+ps*3,ps,color(Piece::I));
+    txt(r,panel_x+36,panel_y+382,textureName(cfg.texture),{155,205,220,255});
+    txt(r,panel_x+36,panel_y+402,cfg.palette_affects_pieces?"PIECE PALETTE: ON":"PIECE PALETTE: OFF",
+        cfg.palette_affects_pieces?C{125,220,170,255}:C{235,180,125,255});
 
     const char* desc="";
     switch(cfg.texture){
@@ -1450,7 +1519,7 @@ void renderTextureSettings(SDL_Renderer*r,const AppConfig&cfg,int sel){
         case VisualTexture::Neon:desc="Dark interior with bright configurable glowing-style edges.";break;
         case VisualTexture::Metallic:desc="Brushed metal with bands, streaks and rim shading.";break;
         case VisualTexture::Pixel:desc="Bounded mosaic pixels with bright and dark micro-cells.";break;
-        case VisualTexture::Dots:desc="Batched dot pattern; spacing and size stay bounded for fast rendering.";break;
+        case VisualTexture::Dots:desc="Batched dot pattern with bounded size and spacing.";break;
         case VisualTexture::Stripes:desc="Directional stripe bands with a subtle trailing shadow.";break;
         case VisualTexture::Grid:desc="Inset panel grid with dark gutters and edge highlights.";break;
         case VisualTexture::Wireframe:desc="Wireframe / hollow shell with adjustable center opacity.";break;
@@ -1460,8 +1529,8 @@ void renderTextureSettings(SDL_Renderer*r,const AppConfig&cfg,int sel){
         case VisualTexture::RetroLCD:desc="Segmented LCD-like dot/cell structure inside each tetromino cell.";break;
         default:break;
     }
-    txt(r,195,652,desc,{155,168,185,255});
-    txt(r,195,676,"UP/DOWN select   LEFT/RIGHT change   ENTER cycle/open   ESC back",{135,145,160,255});
+    txt(r,80,585,desc,{155,168,185,255});
+    txt(r,80,630,"UP/DOWN select   LEFT/RIGHT change   ENTER cycle/open   ESC back",{135,145,160,255});
 }
 
 void renderShaderSettings(SDL_Renderer*r,const AppConfig&cfg,int sel){

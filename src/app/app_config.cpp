@@ -13,6 +13,11 @@ const char* paletteName(VisualPalette palette){
         case VisualPalette::Amber:return "AMBER";
         case VisualPalette::BlackWhite:return "BLACK & WHITE";
         case VisualPalette::MintBlue:return "MINT BLUE";
+        case VisualPalette::LofiWarm:return "LO-FI WARM";
+        case VisualPalette::LofiCool:return "LO-FI COOL";
+        case VisualPalette::PastelBlue:return "PASTEL BLUE";
+        case VisualPalette::Halloween:return "HALLOWEEN";
+        case VisualPalette::SunsetSunrise:return "SUNSET / SUNRISE";
         default:return "DEFAULT";
     }
 }
@@ -570,6 +575,7 @@ bool loadConfig(const std::string&path,AppConfig&c){
             else if(k=="showinputs")c.show_inputs=n!=0;
             else if(k=="fps")c.fps_cap=n;
             else if(k=="palette")c.palette=static_cast<VisualPalette>(n);
+            else if(k=="palettepieces")c.palette_affects_pieces=n!=0;
             else if(k=="texture")c.texture=static_cast<VisualTexture>(n);
             else if(k=="texturecellgap")c.texture_cell_gap=n;
             else if(k=="texturedepth")c.texture_depth=n;
@@ -645,6 +651,7 @@ bool saveConfig(const std::string&path,const AppConfig&c){
      <<"\nshowinputs="<<c.show_inputs
      <<"\nfps="<<c.fps_cap
      <<"\npalette="<<static_cast<int>(c.palette)
+     <<"\npalettepieces="<<c.palette_affects_pieces
      <<"\ntexture="<<static_cast<int>(c.texture)
      <<"\ntexturecellgap="<<c.texture_cell_gap
      <<"\ntexturedepth="<<c.texture_depth
@@ -700,6 +707,7 @@ bool saveConfig(const std::string&path,const AppConfig&c){
 void resetGraphics(AppConfig& c){
     const AppConfig d=defaultConfig();
     c.palette=d.palette;
+    c.palette_affects_pieces=d.palette_affects_pieces;
     c.texture=d.texture;
     c.texture_cell_gap=d.texture_cell_gap;
     c.texture_depth=d.texture_depth;
