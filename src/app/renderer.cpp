@@ -133,8 +133,10 @@ C paletteColor(C c){
             return gradientPalette({25,38,56,255},{126,180,217,255},{220,239,248,255},y,c.a);
         case VisualPalette::Halloween:
             return gradientPalette({24,8,33,255},{185,58,14,255},{255,184,61,255},y,c.a);
-        case VisualPalette::SunsetSunrise:
+        case VisualPalette::Sunset:
             return gradientPalette({25,20,66,255},{226,88,102,255},{255,207,126,255},y,c.a);
+        case VisualPalette::Sunrise:
+            return gradientPalette({38,76,112,255},{151,193,218,255},{255,206,146,255},y,c.a);
         default:
             return c;
     }
@@ -1391,20 +1393,31 @@ void renderMiscellaneous(SDL_Renderer*r,const AppConfig&cfg,int sel,const std::s
     txt(r,265,112,"GRAPHICS",{145,155,170,255},true);
 
     const std::array<std::string,kMiscItemCount> items={
-        "SHADERS","TEXTURES","PALETTES","PALETTE AFFECTS PIECES","RESET GRAPHICS"};
+        "SHADERS","TEXTURES","PALETTES","AFFECTS PIECES","RESET GRAPHICS"};
     for(int n=0;n<kMiscItemCount;++n){
         const float y=160.0f+n*58.0f;
+        const bool selected=n==sel;
         const C normal=n==kMiscResetGraphicsIndex?C{245,180,110,255}:C{210,215,225,255};
-        txt(r,265,y,(n==sel?"> ":"  ")+items[n],n==sel?C{120,220,255,255}:normal,true);
-        if(n==kMiscShadersIndex)txt(r,555,y+4,shaderName(cfg.shader),{155,205,220,255});
-        else if(n==kMiscTexturesIndex)txt(r,555,y+4,textureName(cfg.texture),{155,205,220,255});
-        else if(n==kMiscPalettesIndex)txt(r,555,y+4,paletteName(cfg.palette),{155,205,220,255});
-        else if(n==kMiscPalettePiecesIndex)txt(r,555,y+4,cfg.palette_affects_pieces?"ON":"OFF",
-                                               cfg.palette_affects_pieces?C{125,220,170,255}:C{235,150,125,255});
-    }
+        const C row_color=selected?C{120,220,255,255}:normal;
+        if(n==kMiscPalettePiecesIndex){
+            if(selected)txt(r,265,y,">",row_color,true);
+            const float branch_x=300.0f;
+            fill(r,branch_x,y+2.0f,3.0f,17.0f,row_color);
+            fill(r,branch_x,y+16.0f,18.0f,3.0f,row_color);
+            txt(r,326,y,items[n],row_color,true);
+        }else{
+            txt(r,265,y,(selected?"> ":"  ")+items[n],row_color,true);
+        }
 
-    txt(r,265,470,"Palette Affects Pieces OFF keeps the classic tetromino colors",{155,168,185,255});
-    txt(r,265,494,"while the selected palette still recolors menus and other presentation UI.",{155,168,185,255});
+        const float value_x=650.0f;
+        if(n==kMiscShadersIndex)txt(r,value_x,y,shaderName(cfg.shader),row_color,true);
+        else if(n==kMiscTexturesIndex)txt(r,value_x,y,textureName(cfg.texture),row_color,true);
+        else if(n==kMiscPalettesIndex)txt(r,value_x,y,paletteName(cfg.palette),row_color,true);
+        else if(n==kMiscPalettePiecesIndex){
+            const C toggle_color=selected?C{120,220,255,255}:(cfg.palette_affects_pieces?C{125,220,170,255}:C{235,150,125,255});
+            txt(r,value_x,y,cfg.palette_affects_pieces?"ON":"OFF",toggle_color,true);
+        }
+    }
     if(sel==kMiscShadersIndex)txt(r,265,545,"ENTER open shader settings",{150,205,220,255},true);
     else if(sel==kMiscTexturesIndex)txt(r,265,545,"ENTER open procedural texture settings",{150,205,220,255},true);
     else if(sel==kMiscPalettesIndex)txt(r,265,545,"ENTER open palette settings",{150,205,220,255},true);
@@ -1437,7 +1450,6 @@ void renderPaletteSettings(SDL_Renderer*r,const AppConfig&cfg,int sel){
 
     for(int n=first;n<last;++n){
         const auto palette=static_cast<VisualPalette>(n);
-        const bool active=palette==cfg.palette;
         const bool selected=n==sel;
         const int row=n-first;
         const float y=list_y+row*(row_h+row_gap);
@@ -1445,7 +1457,6 @@ void renderPaletteSettings(SDL_Renderer*r,const AppConfig&cfg,int sel){
         outline(r,list_x,y,list_w,row_h,selected?C{120,220,255,255}:C{45,55,70,255});
         txt(r,list_x+20.0f,y+14.0f,(selected?"> ":"  ")+std::string(paletteName(palette)),
             selected?C{120,220,255,255}:C{210,215,225,255},true);
-        if(active)txt(r,list_x+485.0f,y+18.0f,"ACTIVE",{125,220,170,255});
     }
 
     // Compact scrollbar mirrors the automatically scrolled list window.
@@ -1458,10 +1469,8 @@ void renderPaletteSettings(SDL_Renderer*r,const AppConfig&cfg,int sel){
 
     const auto selected_palette=static_cast<VisualPalette>(std::clamp(sel,0,kVisualPaletteCount-1));
     txt(r,170,530,std::string("SELECTED: ")+paletteName(selected_palette),{155,205,220,255},true);
-    txt(r,170,562,cfg.palette_affects_pieces?"Piece recoloring: ON":"Piece recoloring: OFF (classic tetromino colors)",
-        cfg.palette_affects_pieces?C{125,220,170,255}:C{235,180,125,255});
-    txt(r,170,594,"UP/DOWN scroll   LEFT/RIGHT page   Mouse wheel scrolls",{135,145,160,255});
-    txt(r,170,622,"HOME/END jump   ENTER/ESC back",{135,145,160,255});
+    txt(r,170,578,"UP/DOWN scroll   LEFT/RIGHT page   Mouse wheel scrolls",{135,145,160,255});
+    txt(r,170,606,"HOME/END jump   ENTER/ESC back",{135,145,160,255});
 }
 
 void renderTextureSettings(SDL_Renderer*r,const AppConfig&cfg,int sel){

@@ -17,7 +17,8 @@ enum class VisualPalette : int {
     LofiCool,
     PastelBlue,
     Halloween,
-    SunsetSunrise,
+    Sunset,
+    Sunrise,
     Count
 };
 

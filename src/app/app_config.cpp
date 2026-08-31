@@ -17,7 +17,8 @@ const char* paletteName(VisualPalette palette){
         case VisualPalette::LofiCool:return "LO-FI COOL";
         case VisualPalette::PastelBlue:return "PASTEL BLUE";
         case VisualPalette::Halloween:return "HALLOWEEN";
-        case VisualPalette::SunsetSunrise:return "SUNSET / SUNRISE";
+        case VisualPalette::Sunset:return "SUNSET";
+        case VisualPalette::Sunrise:return "SUNRISE";
         default:return "DEFAULT";
     }
 }
