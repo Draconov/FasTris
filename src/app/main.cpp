@@ -1747,7 +1747,9 @@ struct AppState {
 
         if(screen==Screen::Palettes){
             auto selectPalette=[&](int next){
-                next=std::clamp(next,0,kVisualPaletteCount-1);
+                if(kVisualPaletteCount<=0)return;
+                next%=kVisualPaletteCount;
+                if(next<0)next+=kVisualPaletteCount;
                 if(next==palette_sel)return;
                 palette_sel=next;
                 cfg.palette=static_cast<VisualPalette>(palette_sel);

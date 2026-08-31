@@ -113,8 +113,40 @@ C gradientPalette(C low,C mid,C high,int luminance,Uint8 alpha_value){
     const int t=(luminance-128)*255/127;
     return {lerpByte(mid.r,high.r,t,255),lerpByte(mid.g,high.g,t,255),lerpByte(mid.b,high.b,t,255),alpha_value};
 }
+C paletteActiveColor(VisualPalette palette){
+    switch(palette){
+        case VisualPalette::Hacker:return {80,255,125,255};
+        case VisualPalette::Amber:return {255,176,58,255};
+        case VisualPalette::MintBlue:return {105,244,225,255};
+        case VisualPalette::LofiWarm:return {232,166,126,255};
+        case VisualPalette::LofiCool:return {126,177,215,255};
+        case VisualPalette::PastelBlue:return {151,215,246,255};
+        case VisualPalette::Halloween:return {255,130,35,255};
+        case VisualPalette::Sunset:return {255,108,132,255};
+        case VisualPalette::Sunrise:return {105,194,241,255};
+        case VisualPalette::BlackWhite:return {235,240,248,255};
+        case VisualPalette::Default:
+        default:return {120,220,255,255};
+    }
+}
+
+bool isUiActiveColor(C c){
+    return (c.r==120&&c.g==220&&c.b==255) ||
+           (c.r==150&&c.g==230&&c.b==255);
+}
+
 C paletteColor(C c){
     if(!g_palette_transform_enabled||g_visual_palette==VisualPalette::Default)return c;
+
+    // The default UI uses cyan for every selected/active state. Preserve that
+    // semantic role across palettes by replacing it with one dedicated accent
+    // instead of luminance-mapping it into the palette body colors.
+    if(g_visual_palette!=VisualPalette::BlackWhite&&isUiActiveColor(c)){
+        C active=paletteActiveColor(g_visual_palette);
+        active.a=c.a;
+        return active;
+    }
+
     const int y=(54*int(c.r)+183*int(c.g)+19*int(c.b)+128)>>8;
     switch(g_visual_palette){
         case VisualPalette::Hacker:
@@ -139,23 +171,6 @@ C paletteColor(C c){
             return gradientPalette({55,112,154,255},{232,126,125,255},{255,214,156,255},y,c.a);
         default:
             return c;
-    }
-}
-
-C paletteSelectionAccent(VisualPalette palette){
-    switch(palette){
-        case VisualPalette::Hacker:return {80,255,125,255};
-        case VisualPalette::Amber:return {255,176,58,255};
-        case VisualPalette::MintBlue:return {105,244,225,255};
-        case VisualPalette::LofiWarm:return {232,166,126,255};
-        case VisualPalette::LofiCool:return {126,177,215,255};
-        case VisualPalette::PastelBlue:return {151,215,246,255};
-        case VisualPalette::Halloween:return {255,130,35,255};
-        case VisualPalette::Sunset:return {255,108,132,255};
-        case VisualPalette::Sunrise:return {105,194,241,255};
-        case VisualPalette::Default:
-        case VisualPalette::BlackWhite:
-        default:return {120,220,255,255};
     }
 }
 
@@ -1452,6 +1467,7 @@ void renderPaletteSettings(SDL_Renderer*r,const AppConfig&cfg,int sel){
     set(r,{11,14,20,255});SDL_RenderClear(r);
     txt(r,330,26,"PALETTES",{235,240,248,255},true);
 
+    // Use the space previously occupied by helper text for a taller list.
     constexpr int visible_rows=8;
     constexpr float list_x=145.0f;
     constexpr float list_y=78.0f;
@@ -1473,13 +1489,16 @@ void renderPaletteSettings(SDL_Renderer*r,const AppConfig&cfg,int sel){
         const int row=n-first;
         const float y=list_y+row*(row_h+row_gap);
         if(selected){
-            const C accent=paletteSelectionAccent(palette);
-            // Palette-specific selection accents must not be recolored by the active palette.
+            const C accent=paletteActiveColor(palette);
+            const int accent_luma=(54*int(accent.r)+183*int(accent.g)+19*int(accent.b)+128)>>8;
+            const C text_color=accent_luma>=150?C{18,24,32,255}:C{245,248,252,255};
+            // The list preview shows the palette's active color directly as the
+            // selected row background; do not recolor it through the palette itself.
             const bool previous_transform=g_palette_transform_enabled;
             g_palette_transform_enabled=false;
-            fill(r,list_x,y,list_w,row_h,{20,27,37,255});
-            outline(r,list_x,y,list_w,row_h,accent);
-            txt(r,list_x+20.0f,y+14.0f,"> "+std::string(paletteName(palette)),accent,true);
+            fill(r,list_x,y,list_w,row_h,accent);
+            outline(r,list_x,y,list_w,row_h,shade(accent,-28));
+            txt(r,list_x+20.0f,y+14.0f,"> "+std::string(paletteName(palette)),text_color,true);
             g_palette_transform_enabled=previous_transform;
         }else{
             outline(r,list_x,y,list_w,row_h,{45,55,70,255});
@@ -1494,7 +1513,7 @@ void renderPaletteSettings(SDL_Renderer*r,const AppConfig&cfg,int sel){
     const float travel=std::max(0.0f,list_h-thumb_h);
     const float fraction=max_first>0?float(first)/float(max_first):0.0f;
     const auto selected_palette=static_cast<VisualPalette>(std::clamp(sel,0,kVisualPaletteCount-1));
-    const C accent=paletteSelectionAccent(selected_palette);
+    const C accent=paletteActiveColor(selected_palette);
     const bool previous_transform=g_palette_transform_enabled;
     g_palette_transform_enabled=false;
     fill(r,track_x-2.0f,list_y+travel*fraction,10.0f,thumb_h,accent);
