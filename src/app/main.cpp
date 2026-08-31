@@ -694,6 +694,7 @@ struct AppState {
     int controls_sel{};
     int misc_sel{kMiscShadersIndex};
     int shader_sel{};
+    int shader_slot{};
     int texture_sel{};
     int palette_sel{};
     int custom_sel{};
@@ -1139,32 +1140,50 @@ struct AppState {
         saveConfig(config_path, cfg);
     }
 
+    VisualShader currentShader() const {
+        return cfg.shader_slots[static_cast<std::size_t>(std::clamp(shader_slot,0,static_cast<int>(kShaderSlotCount)-1))].shader;
+    }
+
     int shaderSettingsItemCount() const {
-        return static_cast<int>(shaderControls(cfg.shader).size()) + 2; // shader + controls + back
+        return static_cast<int>(shaderControls(currentShader()).size()) + 3; // slot + shader + controls + back
     }
 
     int shaderSettingsBackIndex() const {
         return shaderSettingsItemCount() - 1;
     }
 
-    void cycleShader(int delta) {
-        int value=static_cast<int>(cfg.shader);
-        value=(value+(delta>0?1:-1)+kVisualShaderCount)%kVisualShaderCount;
-        cfg.shader=static_cast<VisualShader>(value);
+    void cycleShaderSlot(int delta) {
+        if(delta==0)return;
+        const int count=static_cast<int>(kShaderSlotCount);
+        shader_slot=(shader_slot+(delta>0?1:-1)+count)%count;
         shader_sel=0;
+    }
+
+    void cycleShader(int delta) {
+        auto& slot=cfg.shader_slots[static_cast<std::size_t>(shader_slot)];
+        int value=static_cast<int>(slot.shader);
+        value=(value+(delta>0?1:-1)+kVisualShaderCount)%kVisualShaderCount;
+        slot.shader=static_cast<VisualShader>(value);
+        slot.settings=ShaderSettings{}; // a new shader never inherits another shader's values
+        shader_sel=1;
         saveConfig(config_path,cfg);
     }
 
     void adjustShaderSetting(int delta) {
         if(delta==0)return;
         if(shader_sel==0){
+            cycleShaderSlot(delta);
+            return;
+        }
+        if(shader_sel==1){
             cycleShader(delta);
             return;
         }
-        const auto controls=shaderControls(cfg.shader);
-        const int control_index=shader_sel-1;
+        const VisualShader shader=currentShader();
+        const auto controls=shaderControls(shader);
+        const int control_index=shader_sel-2;
         if(control_index<0||control_index>=static_cast<int>(controls.size()))return;
-        adjustShaderControl(cfg,controls[static_cast<std::size_t>(control_index)],delta);
+        adjustShaderControl(cfg,static_cast<std::size_t>(shader_slot),controls[static_cast<std::size_t>(control_index)],delta);
         saveConfig(config_path,cfg);
     }
 
@@ -1717,7 +1736,8 @@ struct AppState {
                     adjustShaderSetting(1);
                 }else if(key==SDLK_RETURN||key==SDLK_KP_ENTER){
                     if(shader_sel==shaderSettingsBackIndex())screen=Screen::Miscellaneous;
-                    else if(shader_sel==0)cycleShader(1);
+                    else if(shader_sel==0)cycleShaderSlot(1);
+                    else if(shader_sel==1)cycleShader(1);
                 }
             }
             return SDL_APP_CONTINUE;
@@ -1963,7 +1983,7 @@ struct AppState {
         } else if (screen == Screen::Miscellaneous) {
             renderMiscellaneous(ren, cfg, misc_sel, settings_status);
         } else if (screen == Screen::Shaders) {
-            renderShaderSettings(ren, cfg, shader_sel);
+            renderShaderSettings(ren, cfg, shader_sel, shader_slot);
         } else if (screen == Screen::Textures) {
             renderTextureSettings(ren, cfg, texture_sel);
         } else if (screen == Screen::Palettes) {

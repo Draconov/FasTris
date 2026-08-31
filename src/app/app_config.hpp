@@ -109,6 +109,7 @@ enum class ShaderControl : int {
     Radius,
     Threshold,
     TrailLength,
+    GhostGlow,
     Noise,
     HorizontalJitter,
     Distortion,
@@ -119,6 +120,43 @@ enum class ShaderControl : int {
     Count
 };
 
+inline constexpr std::size_t kShaderSlotCount = 8;
+
+struct ShaderSettings {
+    int strength{50};
+    int scanlines{35};
+    int scanline_spacing{4};
+    int glow{30};
+    int curvature{35};
+    int vignette{25};
+    int softness{15};
+    int persistence{25};
+    int flicker{10};
+    int pixel_grid{20};
+    int grid_size{8};
+    int subpixel{25};
+    int sharpness{60};
+    int dot_size{2};
+    int dot_spacing{6};
+    int dot_brightness{35};
+    int radius{50};
+    int threshold{65};
+    int trail_length{3};
+    int ghost_glow{0};
+    int noise{20};
+    int horizontal_jitter{10};
+    int distortion{15};
+    int rgb_offset{2};
+    int direction{0};
+    int line_thickness{1};
+    int bloom{25};
+};
+
+struct ShaderSlotConfig {
+    VisualShader shader{VisualShader::None};
+    ShaderSettings settings{};
+};
+
 struct AppConfig {
     Rules rules{};
     bool vsync{false};
@@ -127,7 +165,7 @@ struct AppConfig {
 
     VisualPalette palette{VisualPalette::Default};
     bool palette_affects_pieces{true};
-    VisualShader shader{VisualShader::None};
+    std::array<ShaderSlotConfig, kShaderSlotCount> shader_slots{};
     VisualTexture texture{VisualTexture::Default};
 
     // Presentation-only procedural texture parameters. Rendering is generated
@@ -151,34 +189,8 @@ struct AppConfig {
     int texture_line_thickness{1};
     int texture_grid_size{6};
 
-    // Presentation-only shader parameters. These never enter Rules, replay
-    // serialization, deterministic state hashes, seeds, or verification.
-    int shader_strength{50};
-    int shader_scanlines{35};
-    int shader_scanline_spacing{4};
-    int shader_glow{30};
-    int crt_curvature{35};
-    int shader_vignette{25};
-    int shader_softness{15};
-    int shader_persistence{25};
-    int shader_flicker{10};
-    int shader_pixel_grid{20};
-    int shader_grid_size{8};
-    int shader_subpixel{25};
-    int shader_sharpness{60};
-    int shader_dot_size{2};
-    int shader_dot_spacing{6};
-    int shader_dot_brightness{35};
-    int shader_radius{50};
-    int shader_threshold{65};
-    int shader_trail_length{3};
-    int shader_noise{20};
-    int shader_horizontal_jitter{10};
-    int shader_distortion{15};
-    int shader_rgb_offset{2};
-    int shader_direction{0};
-    int shader_line_thickness{1};
-    int shader_bloom{25};
+    // Each shader slot owns its parameters. Slots are fully independent, so
+    // the same shader can even be used twice with different values.
 
     std::array<SDL_Keycode, static_cast<std::size_t>(Action::Count)> keys{};
     std::array<int, static_cast<std::size_t>(Action::Count)> pads{};
@@ -191,8 +203,8 @@ void adjustTextureControl(AppConfig& cfg, TextureControl control, int direction)
 
 std::span<const ShaderControl> shaderControls(VisualShader shader);
 const char* shaderControlName(ShaderControl control);
-std::string shaderControlValueText(const AppConfig& cfg, ShaderControl control);
-void adjustShaderControl(AppConfig& cfg, ShaderControl control, int direction);
+std::string shaderControlValueText(const AppConfig& cfg, std::size_t slot, ShaderControl control);
+void adjustShaderControl(AppConfig& cfg, std::size_t slot, ShaderControl control, int direction);
 
 AppConfig defaultConfig();
 bool loadConfig(const std::string& path, AppConfig& cfg);

@@ -222,104 +222,107 @@ constexpr std::array<ShaderControl,5> kAnalogControls={
     ShaderControl::HorizontalJitter,ShaderControl::Distortion};
 constexpr std::array<ShaderControl,3> kChromaticControls={
     ShaderControl::Strength,ShaderControl::RgbOffset,ShaderControl::Direction};
-constexpr std::array<ShaderControl,3> kGhostingControls={
-    ShaderControl::Strength,ShaderControl::Persistence,ShaderControl::TrailLength};
+constexpr std::array<ShaderControl,4> kGhostingControls={
+    ShaderControl::Strength,ShaderControl::Persistence,ShaderControl::TrailLength,ShaderControl::GhostGlow};
 constexpr std::array<ShaderControl,5> kArcadeControls={
     ShaderControl::Strength,ShaderControl::BloomAmount,ShaderControl::Scanlines,
     ShaderControl::Vignette,ShaderControl::PixelGrid};
 constexpr std::array<ShaderControl,0> kNoControls={};
 
-int& controlRef(AppConfig& c,ShaderControl control){
+int& controlRef(ShaderSettings& p,ShaderControl control){
     switch(control){
-        case ShaderControl::Strength:return c.shader_strength;
-        case ShaderControl::Scanlines:return c.shader_scanlines;
-        case ShaderControl::ScanlineSpacing:return c.shader_scanline_spacing;
-        case ShaderControl::Glow:return c.shader_glow;
-        case ShaderControl::Curvature:return c.crt_curvature;
-        case ShaderControl::Vignette:return c.shader_vignette;
-        case ShaderControl::Softness:return c.shader_softness;
-        case ShaderControl::Persistence:return c.shader_persistence;
-        case ShaderControl::Flicker:return c.shader_flicker;
-        case ShaderControl::PixelGrid:return c.shader_pixel_grid;
-        case ShaderControl::GridSize:return c.shader_grid_size;
-        case ShaderControl::Subpixel:return c.shader_subpixel;
-        case ShaderControl::Sharpness:return c.shader_sharpness;
-        case ShaderControl::DotSize:return c.shader_dot_size;
-        case ShaderControl::DotSpacing:return c.shader_dot_spacing;
-        case ShaderControl::DotBrightness:return c.shader_dot_brightness;
-        case ShaderControl::Radius:return c.shader_radius;
-        case ShaderControl::Threshold:return c.shader_threshold;
-        case ShaderControl::TrailLength:return c.shader_trail_length;
-        case ShaderControl::Noise:return c.shader_noise;
-        case ShaderControl::HorizontalJitter:return c.shader_horizontal_jitter;
-        case ShaderControl::Distortion:return c.shader_distortion;
-        case ShaderControl::RgbOffset:return c.shader_rgb_offset;
-        case ShaderControl::Direction:return c.shader_direction;
-        case ShaderControl::LineThickness:return c.shader_line_thickness;
-        case ShaderControl::BloomAmount:return c.shader_bloom;
-        default:return c.shader_strength;
+        case ShaderControl::Strength:return p.strength;
+        case ShaderControl::Scanlines:return p.scanlines;
+        case ShaderControl::ScanlineSpacing:return p.scanline_spacing;
+        case ShaderControl::Glow:return p.glow;
+        case ShaderControl::Curvature:return p.curvature;
+        case ShaderControl::Vignette:return p.vignette;
+        case ShaderControl::Softness:return p.softness;
+        case ShaderControl::Persistence:return p.persistence;
+        case ShaderControl::Flicker:return p.flicker;
+        case ShaderControl::PixelGrid:return p.pixel_grid;
+        case ShaderControl::GridSize:return p.grid_size;
+        case ShaderControl::Subpixel:return p.subpixel;
+        case ShaderControl::Sharpness:return p.sharpness;
+        case ShaderControl::DotSize:return p.dot_size;
+        case ShaderControl::DotSpacing:return p.dot_spacing;
+        case ShaderControl::DotBrightness:return p.dot_brightness;
+        case ShaderControl::Radius:return p.radius;
+        case ShaderControl::Threshold:return p.threshold;
+        case ShaderControl::TrailLength:return p.trail_length;
+        case ShaderControl::GhostGlow:return p.ghost_glow;
+        case ShaderControl::Noise:return p.noise;
+        case ShaderControl::HorizontalJitter:return p.horizontal_jitter;
+        case ShaderControl::Distortion:return p.distortion;
+        case ShaderControl::RgbOffset:return p.rgb_offset;
+        case ShaderControl::Direction:return p.direction;
+        case ShaderControl::LineThickness:return p.line_thickness;
+        case ShaderControl::BloomAmount:return p.bloom;
+        default:return p.strength;
     }
 }
 
-int controlValue(const AppConfig& c,ShaderControl control){
+int controlValue(const ShaderSettings& p,ShaderControl control){
     switch(control){
-        case ShaderControl::Strength:return c.shader_strength;
-        case ShaderControl::Scanlines:return c.shader_scanlines;
-        case ShaderControl::ScanlineSpacing:return c.shader_scanline_spacing;
-        case ShaderControl::Glow:return c.shader_glow;
-        case ShaderControl::Curvature:return c.crt_curvature;
-        case ShaderControl::Vignette:return c.shader_vignette;
-        case ShaderControl::Softness:return c.shader_softness;
-        case ShaderControl::Persistence:return c.shader_persistence;
-        case ShaderControl::Flicker:return c.shader_flicker;
-        case ShaderControl::PixelGrid:return c.shader_pixel_grid;
-        case ShaderControl::GridSize:return c.shader_grid_size;
-        case ShaderControl::Subpixel:return c.shader_subpixel;
-        case ShaderControl::Sharpness:return c.shader_sharpness;
-        case ShaderControl::DotSize:return c.shader_dot_size;
-        case ShaderControl::DotSpacing:return c.shader_dot_spacing;
-        case ShaderControl::DotBrightness:return c.shader_dot_brightness;
-        case ShaderControl::Radius:return c.shader_radius;
-        case ShaderControl::Threshold:return c.shader_threshold;
-        case ShaderControl::TrailLength:return c.shader_trail_length;
-        case ShaderControl::Noise:return c.shader_noise;
-        case ShaderControl::HorizontalJitter:return c.shader_horizontal_jitter;
-        case ShaderControl::Distortion:return c.shader_distortion;
-        case ShaderControl::RgbOffset:return c.shader_rgb_offset;
-        case ShaderControl::Direction:return c.shader_direction;
-        case ShaderControl::LineThickness:return c.shader_line_thickness;
-        case ShaderControl::BloomAmount:return c.shader_bloom;
+        case ShaderControl::Strength:return p.strength;
+        case ShaderControl::Scanlines:return p.scanlines;
+        case ShaderControl::ScanlineSpacing:return p.scanline_spacing;
+        case ShaderControl::Glow:return p.glow;
+        case ShaderControl::Curvature:return p.curvature;
+        case ShaderControl::Vignette:return p.vignette;
+        case ShaderControl::Softness:return p.softness;
+        case ShaderControl::Persistence:return p.persistence;
+        case ShaderControl::Flicker:return p.flicker;
+        case ShaderControl::PixelGrid:return p.pixel_grid;
+        case ShaderControl::GridSize:return p.grid_size;
+        case ShaderControl::Subpixel:return p.subpixel;
+        case ShaderControl::Sharpness:return p.sharpness;
+        case ShaderControl::DotSize:return p.dot_size;
+        case ShaderControl::DotSpacing:return p.dot_spacing;
+        case ShaderControl::DotBrightness:return p.dot_brightness;
+        case ShaderControl::Radius:return p.radius;
+        case ShaderControl::Threshold:return p.threshold;
+        case ShaderControl::TrailLength:return p.trail_length;
+        case ShaderControl::GhostGlow:return p.ghost_glow;
+        case ShaderControl::Noise:return p.noise;
+        case ShaderControl::HorizontalJitter:return p.horizontal_jitter;
+        case ShaderControl::Distortion:return p.distortion;
+        case ShaderControl::RgbOffset:return p.rgb_offset;
+        case ShaderControl::Direction:return p.direction;
+        case ShaderControl::LineThickness:return p.line_thickness;
+        case ShaderControl::BloomAmount:return p.bloom;
         default:return 0;
     }
 }
 
-void clampShaderControls(AppConfig& c){
-    c.shader_strength=std::clamp(c.shader_strength,0,100);
-    c.shader_scanlines=std::clamp(c.shader_scanlines,0,100);
-    c.shader_scanline_spacing=std::clamp(c.shader_scanline_spacing,2,16);
-    c.shader_glow=std::clamp(c.shader_glow,0,100);
-    c.crt_curvature=std::clamp(c.crt_curvature,0,100);
-    c.shader_vignette=std::clamp(c.shader_vignette,0,100);
-    c.shader_softness=std::clamp(c.shader_softness,0,100);
-    c.shader_persistence=std::clamp(c.shader_persistence,0,100);
-    c.shader_flicker=std::clamp(c.shader_flicker,0,100);
-    c.shader_pixel_grid=std::clamp(c.shader_pixel_grid,0,100);
-    c.shader_grid_size=std::clamp(c.shader_grid_size,4,24);
-    c.shader_subpixel=std::clamp(c.shader_subpixel,0,100);
-    c.shader_sharpness=std::clamp(c.shader_sharpness,0,100);
-    c.shader_dot_size=std::clamp(c.shader_dot_size,1,6);
-    c.shader_dot_spacing=std::clamp(c.shader_dot_spacing,4,20);
-    c.shader_dot_brightness=std::clamp(c.shader_dot_brightness,0,100);
-    c.shader_radius=std::clamp(c.shader_radius,0,100);
-    c.shader_threshold=std::clamp(c.shader_threshold,0,100);
-    c.shader_trail_length=std::clamp(c.shader_trail_length,1,8);
-    c.shader_noise=std::clamp(c.shader_noise,0,100);
-    c.shader_horizontal_jitter=std::clamp(c.shader_horizontal_jitter,0,100);
-    c.shader_distortion=std::clamp(c.shader_distortion,0,100);
-    c.shader_rgb_offset=std::clamp(c.shader_rgb_offset,0,12);
-    c.shader_direction=std::clamp(c.shader_direction,0,3);
-    c.shader_line_thickness=std::clamp(c.shader_line_thickness,1,4);
-    c.shader_bloom=std::clamp(c.shader_bloom,0,100);
+void clampShaderSettings(ShaderSettings& p){
+    p.strength=std::clamp(p.strength,0,100);
+    p.scanlines=std::clamp(p.scanlines,0,100);
+    p.scanline_spacing=std::clamp(p.scanline_spacing,2,16);
+    p.glow=std::clamp(p.glow,0,100);
+    p.curvature=std::clamp(p.curvature,0,100);
+    p.vignette=std::clamp(p.vignette,0,100);
+    p.softness=std::clamp(p.softness,0,100);
+    p.persistence=std::clamp(p.persistence,0,100);
+    p.flicker=std::clamp(p.flicker,0,100);
+    p.pixel_grid=std::clamp(p.pixel_grid,0,100);
+    p.grid_size=std::clamp(p.grid_size,4,24);
+    p.subpixel=std::clamp(p.subpixel,0,100);
+    p.sharpness=std::clamp(p.sharpness,0,100);
+    p.dot_size=std::clamp(p.dot_size,1,6);
+    p.dot_spacing=std::clamp(p.dot_spacing,4,20);
+    p.dot_brightness=std::clamp(p.dot_brightness,0,100);
+    p.radius=std::clamp(p.radius,0,100);
+    p.threshold=std::clamp(p.threshold,0,100);
+    p.trail_length=std::clamp(p.trail_length,1,8);
+    p.ghost_glow=std::clamp(p.ghost_glow,0,10);
+    p.noise=std::clamp(p.noise,0,100);
+    p.horizontal_jitter=std::clamp(p.horizontal_jitter,0,100);
+    p.distortion=std::clamp(p.distortion,0,100);
+    p.rgb_offset=std::clamp(p.rgb_offset,0,12);
+    p.direction=std::clamp(p.direction,0,3);
+    p.line_thickness=std::clamp(p.line_thickness,1,4);
+    p.bloom=std::clamp(p.bloom,0,100);
 }
 
 void clampConfig(AppConfig&c){
@@ -337,10 +340,12 @@ void clampConfig(AppConfig&c){
     c.rules.custom_start_garbage=std::clamp(c.rules.custom_start_garbage,0,12);
     c.fps_cap=std::clamp(c.fps_cap,0,1000);
     c.palette=static_cast<VisualPalette>(std::clamp(static_cast<int>(c.palette),0,kVisualPaletteCount-1));
-    c.shader=static_cast<VisualShader>(std::clamp(static_cast<int>(c.shader),0,kVisualShaderCount-1));
     c.texture=static_cast<VisualTexture>(std::clamp(static_cast<int>(c.texture),0,kVisualTextureCount-1));
+    for(auto& slot:c.shader_slots){
+        slot.shader=static_cast<VisualShader>(std::clamp(static_cast<int>(slot.shader),0,kVisualShaderCount-1));
+        clampShaderSettings(slot.settings);
+    }
     clampTextureControls(c);
-    clampShaderControls(c);
 }
 
 std::pair<int,int> controlBounds(ShaderControl control){
@@ -350,6 +355,7 @@ std::pair<int,int> controlBounds(ShaderControl control){
         case ShaderControl::DotSize:return {1,6};
         case ShaderControl::DotSpacing:return {4,20};
         case ShaderControl::TrailLength:return {1,8};
+        case ShaderControl::GhostGlow:return {0,10};
         case ShaderControl::RgbOffset:return {0,12};
         case ShaderControl::Direction:return {0,3};
         case ShaderControl::LineThickness:return {1,4};
@@ -364,6 +370,7 @@ int controlStep(ShaderControl control){
         case ShaderControl::DotSize:
         case ShaderControl::DotSpacing:
         case ShaderControl::TrailLength:
+        case ShaderControl::GhostGlow:
         case ShaderControl::RgbOffset:
         case ShaderControl::Direction:
         case ShaderControl::LineThickness:
@@ -495,6 +502,7 @@ const char* shaderControlName(ShaderControl control){
         case ShaderControl::Radius:return "RADIUS";
         case ShaderControl::Threshold:return "THRESHOLD";
         case ShaderControl::TrailLength:return "TRAIL LENGTH";
+        case ShaderControl::GhostGlow:return "GHOST GLOW";
         case ShaderControl::Noise:return "NOISE";
         case ShaderControl::HorizontalJitter:return "HORIZONTAL JITTER";
         case ShaderControl::Distortion:return "DISTORTION";
@@ -506,8 +514,9 @@ const char* shaderControlName(ShaderControl control){
     }
 }
 
-std::string shaderControlValueText(const AppConfig& cfg,ShaderControl control){
-    const int value=controlValue(cfg,control);
+std::string shaderControlValueText(const AppConfig& cfg,std::size_t slot,ShaderControl control){
+    if(slot>=cfg.shader_slots.size())return "";
+    const int value=controlValue(cfg.shader_slots[slot].settings,control);
     switch(control){
         case ShaderControl::ScanlineSpacing:
         case ShaderControl::GridSize:
@@ -517,6 +526,7 @@ std::string shaderControlValueText(const AppConfig& cfg,ShaderControl control){
         case ShaderControl::LineThickness:
             return std::to_string(value)+" PX";
         case ShaderControl::TrailLength:
+        case ShaderControl::GhostGlow:
             return std::to_string(value);
         case ShaderControl::Direction:
             switch(value){
@@ -531,10 +541,10 @@ std::string shaderControlValueText(const AppConfig& cfg,ShaderControl control){
     }
 }
 
-void adjustShaderControl(AppConfig& cfg,ShaderControl control,int direction){
-    if(direction==0)return;
+void adjustShaderControl(AppConfig& cfg,std::size_t slot,ShaderControl control,int direction){
+    if(direction==0||slot>=cfg.shader_slots.size()||cfg.shader_slots[slot].shader==VisualShader::None)return;
     auto [lo,hi]=controlBounds(control);
-    int& value=controlRef(cfg,control);
+    int& value=controlRef(cfg.shader_slots[slot].settings,control);
     if(control==ShaderControl::Direction){
         const int span=hi-lo+1;
         value=lo+(value-lo+(direction>0?1:-1)+span)%span;
@@ -548,6 +558,92 @@ AppConfig defaultConfig(){
     c.keys[ix(Action::Left)]=SDLK_LEFT;c.keys[ix(Action::Right)]=SDLK_RIGHT;c.keys[ix(Action::SoftDrop)]=SDLK_DOWN;c.keys[ix(Action::HardDrop)]=SDLK_SPACE;c.keys[ix(Action::RotateCW)]=SDLK_UP;c.keys[ix(Action::RotateCCW)]=SDLK_Z;c.keys[ix(Action::Rotate180)]=SDLK_A;c.keys[ix(Action::Hold)]=SDLK_C;c.keys[ix(Action::Restart)]=SDLK_F5;c.keys[ix(Action::Pause)]=SDLK_P;
     c.pads[ix(Action::Left)]=SDL_GAMEPAD_BUTTON_DPAD_LEFT;c.pads[ix(Action::Right)]=SDL_GAMEPAD_BUTTON_DPAD_RIGHT;c.pads[ix(Action::SoftDrop)]=SDL_GAMEPAD_BUTTON_DPAD_DOWN;c.pads[ix(Action::HardDrop)]=SDL_GAMEPAD_BUTTON_DPAD_UP;c.pads[ix(Action::RotateCW)]=SDL_GAMEPAD_BUTTON_SOUTH;c.pads[ix(Action::RotateCCW)]=SDL_GAMEPAD_BUTTON_WEST;c.pads[ix(Action::Rotate180)]=SDL_GAMEPAD_BUTTON_NORTH;c.pads[ix(Action::Hold)]=SDL_GAMEPAD_BUTTON_LEFT_SHOULDER;c.pads[ix(Action::Restart)]=SDL_GAMEPAD_BUTTON_START;c.pads[ix(Action::Pause)]=SDL_GAMEPAD_BUTTON_BACK;
     return c;
+}
+
+namespace {
+bool parseIndexSuffix(const std::string& key,const std::string& prefix,int& index,std::string* suffix=nullptr){
+    if(key.rfind(prefix,0)!=0)return false;
+    std::size_t pos=prefix.size();
+    const std::size_t begin=pos;
+    while(pos<key.size()&&key[pos]>='0'&&key[pos]<='9')++pos;
+    if(pos==begin)return false;
+    try{index=std::stoi(key.substr(begin,pos-begin));}catch(...){return false;}
+    if(suffix){
+        if(pos>=key.size()||key[pos]!='_')return false;
+        *suffix=key.substr(pos+1);
+    }else if(pos!=key.size())return false;
+    return true;
+}
+
+bool applyShaderSlotValue(AppConfig& c,const std::string& key,int value){
+    int index=0;std::string field;
+    if(!parseIndexSuffix(key,"shaderslot",index,&field))return false;
+    if(index<0||index>=static_cast<int>(kShaderSlotCount))return true;
+    auto& slot=c.shader_slots[static_cast<std::size_t>(index)];
+    auto& p=slot.settings;
+    if(field=="mode")slot.shader=static_cast<VisualShader>(value);
+    else if(field=="strength")p.strength=value;
+    else if(field=="scanlines")p.scanlines=value;
+    else if(field=="scanlinespacing")p.scanline_spacing=value;
+    else if(field=="glow")p.glow=value;
+    else if(field=="curvature")p.curvature=value;
+    else if(field=="vignette")p.vignette=value;
+    else if(field=="softness")p.softness=value;
+    else if(field=="persistence")p.persistence=value;
+    else if(field=="flicker")p.flicker=value;
+    else if(field=="pixelgrid")p.pixel_grid=value;
+    else if(field=="gridsize")p.grid_size=value;
+    else if(field=="subpixel")p.subpixel=value;
+    else if(field=="sharpness")p.sharpness=value;
+    else if(field=="dotsize")p.dot_size=value;
+    else if(field=="dotspacing")p.dot_spacing=value;
+    else if(field=="dotbrightness")p.dot_brightness=value;
+    else if(field=="radius")p.radius=value;
+    else if(field=="threshold")p.threshold=value;
+    else if(field=="traillength")p.trail_length=value;
+    else if(field=="ghostglow")p.ghost_glow=value;
+    else if(field=="noise")p.noise=value;
+    else if(field=="jitter")p.horizontal_jitter=value;
+    else if(field=="distortion")p.distortion=value;
+    else if(field=="rgboffset")p.rgb_offset=value;
+    else if(field=="direction")p.direction=value;
+    else if(field=="linethickness")p.line_thickness=value;
+    else if(field=="bloom")p.bloom=value;
+    return true;
+}
+
+void writeShaderSlot(std::ostream& f,int index,const ShaderSlotConfig& slot){
+    const std::string k="\nshaderslot"+std::to_string(index)+"_";
+    const auto& p=slot.settings;
+    f<<k<<"mode="<<static_cast<int>(slot.shader)
+     <<k<<"strength="<<p.strength
+     <<k<<"scanlines="<<p.scanlines
+     <<k<<"scanlinespacing="<<p.scanline_spacing
+     <<k<<"glow="<<p.glow
+     <<k<<"curvature="<<p.curvature
+     <<k<<"vignette="<<p.vignette
+     <<k<<"softness="<<p.softness
+     <<k<<"persistence="<<p.persistence
+     <<k<<"flicker="<<p.flicker
+     <<k<<"pixelgrid="<<p.pixel_grid
+     <<k<<"gridsize="<<p.grid_size
+     <<k<<"subpixel="<<p.subpixel
+     <<k<<"sharpness="<<p.sharpness
+     <<k<<"dotsize="<<p.dot_size
+     <<k<<"dotspacing="<<p.dot_spacing
+     <<k<<"dotbrightness="<<p.dot_brightness
+     <<k<<"radius="<<p.radius
+     <<k<<"threshold="<<p.threshold
+     <<k<<"traillength="<<p.trail_length
+     <<k<<"ghostglow="<<p.ghost_glow
+     <<k<<"noise="<<p.noise
+     <<k<<"jitter="<<p.horizontal_jitter
+     <<k<<"distortion="<<p.distortion
+     <<k<<"rgboffset="<<p.rgb_offset
+     <<k<<"direction="<<p.direction
+     <<k<<"linethickness="<<p.line_thickness
+     <<k<<"bloom="<<p.bloom;
+}
 }
 
 bool loadConfig(const std::string&path,AppConfig&c){
@@ -596,33 +692,7 @@ bool loadConfig(const std::string&path,AppConfig&c){
             else if(k=="texturespacing")c.texture_spacing=n;
             else if(k=="texturelinethickness")c.texture_line_thickness=n;
             else if(k=="texturegridsize")c.texture_grid_size=n;
-            else if(k=="shader")c.shader=static_cast<VisualShader>(n);
-            else if(k=="shaderstrength")c.shader_strength=n;
-            else if(k=="shaderscanlines")c.shader_scanlines=n;
-            else if(k=="shaderscanlinespacing")c.shader_scanline_spacing=n;
-            else if(k=="shaderglow")c.shader_glow=n;
-            else if(k=="crtcurvature")c.crt_curvature=n;
-            else if(k=="shadervignette")c.shader_vignette=n;
-            else if(k=="shadersoftness")c.shader_softness=n;
-            else if(k=="shaderpersistence")c.shader_persistence=n;
-            else if(k=="shaderflicker")c.shader_flicker=n;
-            else if(k=="shaderpixelgrid")c.shader_pixel_grid=n;
-            else if(k=="shadergridsize")c.shader_grid_size=n;
-            else if(k=="shadersubpixel")c.shader_subpixel=n;
-            else if(k=="shadersharpness")c.shader_sharpness=n;
-            else if(k=="shaderdotsize")c.shader_dot_size=n;
-            else if(k=="shaderdotspacing")c.shader_dot_spacing=n;
-            else if(k=="shaderdotbrightness")c.shader_dot_brightness=n;
-            else if(k=="shaderradius")c.shader_radius=n;
-            else if(k=="shaderthreshold")c.shader_threshold=n;
-            else if(k=="shadertraillength")c.shader_trail_length=n;
-            else if(k=="shadernoise")c.shader_noise=n;
-            else if(k=="shaderjitter")c.shader_horizontal_jitter=n;
-            else if(k=="shaderdistortion")c.shader_distortion=n;
-            else if(k=="shaderrgboffset")c.shader_rgb_offset=n;
-            else if(k=="shaderdirection")c.shader_direction=n;
-            else if(k=="shaderlinethickness")c.shader_line_thickness=n;
-            else if(k=="shaderbloom")c.shader_bloom=n;
+            else if(k.rfind("shaderslot",0)==0)applyShaderSlotValue(c,k,n);
             else if(k=="tournament")c.rules.tournament=n!=0;
             else if(k.rfind("key",0)==0){int i=std::stoi(k.substr(3));if(i>=0&&i<(int)c.keys.size())c.keys[i]=static_cast<SDL_Keycode>(n);}
             else if(k.rfind("pad",0)==0){int i=std::stoi(k.substr(3));if(i>=0&&i<(int)c.pads.size())c.pads[i]=n;}
@@ -672,34 +742,10 @@ bool saveConfig(const std::string&path,const AppConfig&c){
      <<"\ntexturespacing="<<c.texture_spacing
      <<"\ntexturelinethickness="<<c.texture_line_thickness
      <<"\ntexturegridsize="<<c.texture_grid_size
-     <<"\nshader="<<static_cast<int>(c.shader)
-     <<"\nshaderstrength="<<c.shader_strength
-     <<"\nshaderscanlines="<<c.shader_scanlines
-     <<"\nshaderscanlinespacing="<<c.shader_scanline_spacing
-     <<"\nshaderglow="<<c.shader_glow
-     <<"\ncrtcurvature="<<c.crt_curvature
-     <<"\nshadervignette="<<c.shader_vignette
-     <<"\nshadersoftness="<<c.shader_softness
-     <<"\nshaderpersistence="<<c.shader_persistence
-     <<"\nshaderflicker="<<c.shader_flicker
-     <<"\nshaderpixelgrid="<<c.shader_pixel_grid
-     <<"\nshadergridsize="<<c.shader_grid_size
-     <<"\nshadersubpixel="<<c.shader_subpixel
-     <<"\nshadersharpness="<<c.shader_sharpness
-     <<"\nshaderdotsize="<<c.shader_dot_size
-     <<"\nshaderdotspacing="<<c.shader_dot_spacing
-     <<"\nshaderdotbrightness="<<c.shader_dot_brightness
-     <<"\nshaderradius="<<c.shader_radius
-     <<"\nshaderthreshold="<<c.shader_threshold
-     <<"\nshadertraillength="<<c.shader_trail_length
-     <<"\nshadernoise="<<c.shader_noise
-     <<"\nshaderjitter="<<c.shader_horizontal_jitter
-     <<"\nshaderdistortion="<<c.shader_distortion
-     <<"\nshaderrgboffset="<<c.shader_rgb_offset
-     <<"\nshaderdirection="<<c.shader_direction
-     <<"\nshaderlinethickness="<<c.shader_line_thickness
-     <<"\nshaderbloom="<<c.shader_bloom
-     <<"\ntournament="<<c.rules.tournament<<"\n";
+     <<"\ntournament="<<c.rules.tournament;
+    for(std::size_t i=0;i<c.shader_slots.size();++i)
+        writeShaderSlot(f,static_cast<int>(i),c.shader_slots[i]);
+    f<<"\n";
     for(std::size_t i=0;i<c.keys.size();++i)f<<"key"<<i<<'='<<static_cast<long long>(c.keys[i])<<"\n";
     for(std::size_t i=0;i<c.pads.size();++i)f<<"pad"<<i<<'='<<c.pads[i]<<"\n";
     return bool(f);
@@ -728,33 +774,7 @@ void resetGraphics(AppConfig& c){
     c.texture_spacing=d.texture_spacing;
     c.texture_line_thickness=d.texture_line_thickness;
     c.texture_grid_size=d.texture_grid_size;
-    c.shader=d.shader;
-    c.shader_strength=d.shader_strength;
-    c.shader_scanlines=d.shader_scanlines;
-    c.shader_scanline_spacing=d.shader_scanline_spacing;
-    c.shader_glow=d.shader_glow;
-    c.crt_curvature=d.crt_curvature;
-    c.shader_vignette=d.shader_vignette;
-    c.shader_softness=d.shader_softness;
-    c.shader_persistence=d.shader_persistence;
-    c.shader_flicker=d.shader_flicker;
-    c.shader_pixel_grid=d.shader_pixel_grid;
-    c.shader_grid_size=d.shader_grid_size;
-    c.shader_subpixel=d.shader_subpixel;
-    c.shader_sharpness=d.shader_sharpness;
-    c.shader_dot_size=d.shader_dot_size;
-    c.shader_dot_spacing=d.shader_dot_spacing;
-    c.shader_dot_brightness=d.shader_dot_brightness;
-    c.shader_radius=d.shader_radius;
-    c.shader_threshold=d.shader_threshold;
-    c.shader_trail_length=d.shader_trail_length;
-    c.shader_noise=d.shader_noise;
-    c.shader_horizontal_jitter=d.shader_horizontal_jitter;
-    c.shader_distortion=d.shader_distortion;
-    c.shader_rgb_offset=d.shader_rgb_offset;
-    c.shader_direction=d.shader_direction;
-    c.shader_line_thickness=d.shader_line_thickness;
-    c.shader_bloom=d.shader_bloom;
+    c.shader_slots=d.shader_slots;
 }
 
 void resetSettings(AppConfig& c){

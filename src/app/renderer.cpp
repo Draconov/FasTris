@@ -9,6 +9,7 @@
 #include <cstdio>
 #include <iomanip>
 #include <sstream>
+#include <utility>
 
 namespace fasttris::app {
 namespace {
@@ -64,6 +65,7 @@ struct ShaderRuntime {
     int radius{50};
     int threshold{65};
     int trail_length{3};
+    int ghost_glow{0};
     int noise{20};
     int horizontal_jitter{10};
     int distortion{15};
@@ -73,22 +75,30 @@ struct ShaderRuntime {
     int bloom{25};
 };
 ShaderRuntime g_shader{};
+std::array<ShaderRuntime,kShaderSlotCount> g_shader_stack{};
+std::size_t g_active_shader_slot{};
 
 constexpr int kWarpCols=32;
 constexpr int kWarpRows=24;
 constexpr int kWarpVertexCount=(kWarpCols+1)*(kWarpRows+1);
 constexpr int kWarpIndexCount=kWarpCols*kWarpRows*6;
+struct ShaderHistoryRuntime {
+    SDL_Texture* a{};
+    SDL_Texture* b{};
+    bool valid{};
+};
 struct PostProcessRuntime {
     SDL_Renderer* renderer{};
     SDL_Texture* frame{};
+    SDL_Texture* pass_a{};
+    SDL_Texture* pass_b{};
     SDL_Texture* blur{};
-    SDL_Texture* history_a{};
-    SDL_Texture* history_b{};
+    SDL_Texture* input{};
+    std::array<ShaderHistoryRuntime,kShaderSlotCount> history{};
     int width{};
     int height{};
     bool capturing{};
     bool target_unavailable{};
-    bool history_valid{};
     bool blur_ready{};
     std::array<SDL_Vertex,kWarpVertexCount> warp_vertices{};
     std::array<int,kWarpIndexCount> warp_indices{};
@@ -502,35 +512,41 @@ void setVisualTexture(const AppConfig& cfg){
 }
 
 void setVisualShader(const AppConfig& cfg){
-    const VisualShader previous_mode=g_shader.mode;
-    g_shader.mode=cfg.shader;
-    g_shader.strength=cfg.shader_strength;
-    g_shader.scanlines=cfg.shader_scanlines;
-    g_shader.scanline_spacing=cfg.shader_scanline_spacing;
-    g_shader.glow=cfg.shader_glow;
-    g_shader.curvature=cfg.crt_curvature;
-    g_shader.vignette=cfg.shader_vignette;
-    g_shader.softness=cfg.shader_softness;
-    g_shader.persistence=cfg.shader_persistence;
-    g_shader.flicker=cfg.shader_flicker;
-    g_shader.pixel_grid=cfg.shader_pixel_grid;
-    g_shader.grid_size=cfg.shader_grid_size;
-    g_shader.subpixel=cfg.shader_subpixel;
-    g_shader.sharpness=cfg.shader_sharpness;
-    g_shader.dot_size=cfg.shader_dot_size;
-    g_shader.dot_spacing=cfg.shader_dot_spacing;
-    g_shader.dot_brightness=cfg.shader_dot_brightness;
-    g_shader.radius=cfg.shader_radius;
-    g_shader.threshold=cfg.shader_threshold;
-    g_shader.trail_length=cfg.shader_trail_length;
-    g_shader.noise=cfg.shader_noise;
-    g_shader.horizontal_jitter=cfg.shader_horizontal_jitter;
-    g_shader.distortion=cfg.shader_distortion;
-    g_shader.rgb_offset=cfg.shader_rgb_offset;
-    g_shader.direction=cfg.shader_direction;
-    g_shader.line_thickness=cfg.shader_line_thickness;
-    g_shader.bloom=cfg.shader_bloom;
-    if(previous_mode!=g_shader.mode)g_post.history_valid=false;
+    for(std::size_t i=0;i<kShaderSlotCount;++i){
+        const VisualShader previous=g_shader_stack[i].mode;
+        const VisualShader mode=cfg.shader_slots[i].shader;
+        const auto& p=cfg.shader_slots[i].settings;
+        auto& out=g_shader_stack[i];
+        out.mode=mode;
+        out.strength=p.strength;
+        out.scanlines=p.scanlines;
+        out.scanline_spacing=p.scanline_spacing;
+        out.glow=p.glow;
+        out.curvature=p.curvature;
+        out.vignette=p.vignette;
+        out.softness=p.softness;
+        out.persistence=p.persistence;
+        out.flicker=p.flicker;
+        out.pixel_grid=p.pixel_grid;
+        out.grid_size=p.grid_size;
+        out.subpixel=p.subpixel;
+        out.sharpness=p.sharpness;
+        out.dot_size=p.dot_size;
+        out.dot_spacing=p.dot_spacing;
+        out.dot_brightness=p.dot_brightness;
+        out.radius=p.radius;
+        out.threshold=p.threshold;
+        out.trail_length=p.trail_length;
+        out.ghost_glow=p.ghost_glow;
+        out.noise=p.noise;
+        out.horizontal_jitter=p.horizontal_jitter;
+        out.distortion=p.distortion;
+        out.rgb_offset=p.rgb_offset;
+        out.direction=p.direction;
+        out.line_thickness=p.line_thickness;
+        out.bloom=p.bloom;
+        if(previous!=mode)g_post.history[i].valid=false;
+    }
 }
 
 namespace {
@@ -543,43 +559,30 @@ int effectAlpha(int local_percent,int max_alpha=255){
     return std::clamp(max_alpha*local*strength/10000,0,255);
 }
 
-bool shaderNeedsFrameTexture(VisualShader shader){
-    switch(shader){
-        case VisualShader::CRT:
-        case VisualShader::Terminal:
-        case VisualShader::LCD:
-        case VisualShader::DotMatrix:
-        case VisualShader::Bloom:
-        case VisualShader::Analog:
-        case VisualShader::Chromatic:
-        case VisualShader::Ghosting:
-        case VisualShader::Arcade:
-            return true;
-        case VisualShader::None:
-        case VisualShader::Scanlines:
-        case VisualShader::Vignette:
-        default:
-            return false;
-    }
-}
-
-bool shaderNeedsHistory(VisualShader shader){
-    return shader==VisualShader::Terminal||shader==VisualShader::Ghosting;
+bool shaderActive(const ShaderRuntime& shader){
+    return shader.mode!=VisualShader::None&&shader.strength>0;
 }
 
 void destroyTexture(SDL_Texture*& texture){
     if(texture){SDL_DestroyTexture(texture);texture=nullptr;}
 }
 
+void destroyHistory(ShaderHistoryRuntime& history){
+    destroyTexture(history.a);
+    destroyTexture(history.b);
+    history.valid=false;
+}
+
 void destroyPostTargets(){
     destroyTexture(g_post.frame);
+    destroyTexture(g_post.pass_a);
+    destroyTexture(g_post.pass_b);
     destroyTexture(g_post.blur);
-    destroyTexture(g_post.history_a);
-    destroyTexture(g_post.history_b);
+    for(auto& history:g_post.history)destroyHistory(history);
+    g_post.input=nullptr;
     g_post.width=0;
     g_post.height=0;
     g_post.capturing=false;
-    g_post.history_valid=false;
     g_post.blur_ready=false;
     g_post.warp_width=-1;
     g_post.warp_height=-1;
@@ -616,6 +619,20 @@ bool ensureFrameTarget(SDL_Renderer* r,int w,int h){
     return true;
 }
 
+bool ensurePassTargets(SDL_Renderer* r){
+    if(g_post.pass_a&&g_post.pass_b)return true;
+    destroyTexture(g_post.pass_a);
+    destroyTexture(g_post.pass_b);
+    g_post.pass_a=makeTarget(r,g_post.width,g_post.height,SDL_SCALEMODE_LINEAR);
+    g_post.pass_b=makeTarget(r,g_post.width,g_post.height,SDL_SCALEMODE_LINEAR);
+    if(!g_post.pass_a||!g_post.pass_b){
+        destroyTexture(g_post.pass_a);
+        destroyTexture(g_post.pass_b);
+        return false;
+    }
+    return true;
+}
+
 bool ensureBlurTarget(SDL_Renderer* r){
     if(g_post.blur)return true;
     const int bw=std::max(1,g_post.width/4);
@@ -624,18 +641,17 @@ bool ensureBlurTarget(SDL_Renderer* r){
     return g_post.blur!=nullptr;
 }
 
-bool ensureHistoryTargets(SDL_Renderer* r){
-    if(g_post.history_a&&g_post.history_b)return true;
-    destroyTexture(g_post.history_a);
-    destroyTexture(g_post.history_b);
+bool ensureHistoryTargets(SDL_Renderer* r,std::size_t slot){
+    if(slot>=g_post.history.size())return false;
+    auto& history=g_post.history[slot];
+    if(history.a&&history.b)return true;
+    destroyHistory(history);
     const int hw=std::max(1,g_post.width/2);
     const int hh=std::max(1,g_post.height/2);
-    g_post.history_a=makeTarget(r,hw,hh,SDL_SCALEMODE_LINEAR);
-    g_post.history_b=makeTarget(r,hw,hh,SDL_SCALEMODE_LINEAR);
-    g_post.history_valid=false;
-    if(!g_post.history_a||!g_post.history_b){
-        destroyTexture(g_post.history_a);
-        destroyTexture(g_post.history_b);
+    history.a=makeTarget(r,hw,hh,SDL_SCALEMODE_LINEAR);
+    history.b=makeTarget(r,hw,hh,SDL_SCALEMODE_LINEAR);
+    if(!history.a||!history.b){
+        destroyHistory(history);
         return false;
     }
     return true;
@@ -666,13 +682,14 @@ void clearTarget(SDL_Renderer* r,C color={0,0,0,255}){
 
 bool prepareBlur(SDL_Renderer* r){
     if(g_post.blur_ready&&g_post.blur)return true;
-    if(!ensureBlurTarget(r))return false;
+    if(!g_post.input||!ensureBlurTarget(r))return false;
+    SDL_Texture* previous=SDL_GetRenderTarget(r);
     SDL_SetRenderTarget(r,g_post.blur);
     SDL_SetRenderViewport(r,nullptr);
     SDL_SetRenderScale(r,1.0f,1.0f);
     clearTarget(r,{0,0,0,255});
-    renderTextureCopy(r,g_post.frame,nullptr,nullptr,SDL_BLENDMODE_NONE,255);
-    SDL_SetRenderTarget(r,nullptr);
+    renderTextureCopy(r,g_post.input,nullptr,nullptr,SDL_BLENDMODE_NONE,255);
+    SDL_SetRenderTarget(r,previous);
     SDL_SetRenderViewport(r,nullptr);
     SDL_SetRenderScale(r,1.0f,1.0f);
     g_post.blur_ready=true;
@@ -793,10 +810,10 @@ void prepareWarpMesh(int w,int h,int curvature,int strength,float alpha){
 
 void renderWarpedFrame(SDL_Renderer*r,int w,int h,float alpha=1.0f){
     prepareWarpMesh(w,h,g_shader.curvature,g_shader.strength,alpha);
-    SDL_SetTextureBlendMode(g_post.frame,SDL_BLENDMODE_BLEND);
-    SDL_RenderGeometry(r,g_post.frame,g_post.warp_vertices.data(),kWarpVertexCount,
+    SDL_SetTextureBlendMode(g_post.input,SDL_BLENDMODE_BLEND);
+    SDL_RenderGeometry(r,g_post.input,g_post.warp_vertices.data(),kWarpVertexCount,
                        g_post.warp_indices.data(),kWarpIndexCount);
-    resetTextureState(g_post.frame);
+    resetTextureState(g_post.input);
 }
 
 void renderBloom(SDL_Renderer*r,int w,int h,int amount,int radius,int softness,int threshold,
@@ -845,7 +862,7 @@ void renderAnalogFrame(SDL_Renderer*r,int w,int h){
     const float jitter_px=(g_shader.horizontal_jitter/100.0f)*std::max(2.0f,w*0.018f)*g_shader.strength/100.0f;
     const float distortion=g_shader.distortion/100.0f*g_shader.strength/100.0f;
     const int strip_h=std::clamp(18-int(distortion*14.0f),4,18);
-    SDL_SetTextureBlendMode(g_post.frame,SDL_BLENDMODE_NONE);
+    SDL_SetTextureBlendMode(g_post.input,SDL_BLENDMODE_NONE);
     for(int y=0;y<h;y+=strip_h){
         const int sh=std::min(strip_h,h-y);
         const float wave=std::sin(float(y)*0.031f+float(tick%2000u)*0.006f);
@@ -854,9 +871,9 @@ void renderAnalogFrame(SDL_Renderer*r,int w,int h){
         const float stretch=distortion*std::abs(wave)*w*0.006f;
         SDL_FRect src{0,float(y),float(w),float(sh)};
         SDL_FRect dst{dx,float(y),float(w)+stretch,float(sh)};
-        SDL_RenderTexture(r,g_post.frame,&src,&dst);
+        SDL_RenderTexture(r,g_post.input,&src,&dst);
     }
-    resetTextureState(g_post.frame);
+    resetTextureState(g_post.input);
 }
 
 void applyAnalogNoise(SDL_Renderer*r,int w,int h){
@@ -891,45 +908,60 @@ void renderChromaticFrame(SDL_Renderer*r,int w,int h){
     SDL_FRect red{-dx,-dy,float(w),float(h)};
     SDL_FRect green{0,0,float(w),float(h)};
     SDL_FRect blue{dx,dy,float(w),float(h)};
-    renderTextureCopy(r,g_post.frame,nullptr,&red,SDL_BLENDMODE_ADD,255,255,0,0);
-    renderTextureCopy(r,g_post.frame,nullptr,&green,SDL_BLENDMODE_ADD,255,0,255,0);
-    renderTextureCopy(r,g_post.frame,nullptr,&blue,SDL_BLENDMODE_ADD,255,0,0,255);
+    renderTextureCopy(r,g_post.input,nullptr,&red,SDL_BLENDMODE_ADD,255,255,0,0);
+    renderTextureCopy(r,g_post.input,nullptr,&green,SDL_BLENDMODE_ADD,255,0,255,0);
+    renderTextureCopy(r,g_post.input,nullptr,&blue,SDL_BLENDMODE_ADD,255,0,0,255);
 }
 
-void renderHistoryTrail(SDL_Renderer*r,int w,int h,int persistence,int trails,C tint={255,255,255,255}){
-    if(!g_post.history_valid||!g_post.history_a)return;
+void renderHistoryTrail(SDL_Renderer*r,int w,int h,int persistence,int trails,C tint={255,255,255,255},int ghost_glow=0){
+    if(g_active_shader_slot>=g_post.history.size())return;
+    const auto& history=g_post.history[g_active_shader_slot];
+    if(!history.valid||!history.a)return;
     const int base=effectAlpha(persistence,105);
     if(base<=0)return;
     const int count=std::clamp(trails,1,8);
+    const int glow=std::clamp(ghost_glow,0,10);
     const float distance=0.75f+std::clamp(persistence,0,100)*0.035f;
     for(int i=count-1;i>=0;--i){
         const float offset=(i+1)*distance;
+        const int trail_alpha=std::clamp(base/(2+i),0,100);
+        if(glow>0){
+            const float spread=0.45f+glow*0.32f;
+            const int glow_alpha=std::clamp(trail_alpha*glow/18,1,72);
+            const std::array<std::pair<float,float>,8> taps={{{-1,0},{1,0},{0,-1},{0,1},{-0.7f,-0.7f},{0.7f,-0.7f},{-0.7f,0.7f},{0.7f,0.7f}}};
+            for(const auto& tap:taps){
+                SDL_FRect glow_dst{offset+tap.first*spread,offset*0.35f+tap.second*spread,float(w),float(h)};
+                renderTextureCopy(r,history.a,nullptr,&glow_dst,SDL_BLENDMODE_ADD,static_cast<Uint8>(glow_alpha),tint.r,tint.g,tint.b);
+            }
+        }
         SDL_FRect dst{offset,offset*0.35f,float(w),float(h)};
-        const int alpha=std::clamp(base/(2+i),0,100);
-        renderTextureCopy(r,g_post.history_a,nullptr,&dst,SDL_BLENDMODE_ADD,static_cast<Uint8>(alpha),tint.r,tint.g,tint.b);
+        renderTextureCopy(r,history.a,nullptr,&dst,SDL_BLENDMODE_ADD,static_cast<Uint8>(trail_alpha),tint.r,tint.g,tint.b);
     }
 }
 
 void updateHistory(SDL_Renderer*r,int persistence){
-    if(!ensureHistoryTargets(r))return;
-    SDL_SetRenderTarget(r,g_post.history_b);
+    if(g_active_shader_slot>=g_post.history.size()||!g_post.input)return;
+    if(!ensureHistoryTargets(r,g_active_shader_slot))return;
+    auto& history=g_post.history[g_active_shader_slot];
+    SDL_Texture* previous=SDL_GetRenderTarget(r);
+    SDL_SetRenderTarget(r,history.b);
     SDL_SetRenderViewport(r,nullptr);
     SDL_SetRenderScale(r,1.0f,1.0f);
     clearTarget(r,{0,0,0,255});
-    if(!g_post.history_valid){
-        renderTextureCopy(r,g_post.frame,nullptr,nullptr,SDL_BLENDMODE_NONE,255);
+    if(!history.valid){
+        renderTextureCopy(r,g_post.input,nullptr,nullptr,SDL_BLENDMODE_NONE,255);
     }else{
         const int p=std::clamp(persistence,0,100);
         const Uint8 old_alpha=static_cast<Uint8>(std::clamp(35+p*2,35,225));
         const Uint8 current_alpha=static_cast<Uint8>(std::clamp(235-p*17/10,65,235));
-        renderTextureCopy(r,g_post.history_a,nullptr,nullptr,SDL_BLENDMODE_BLEND,old_alpha);
-        renderTextureCopy(r,g_post.frame,nullptr,nullptr,SDL_BLENDMODE_ADD,current_alpha);
+        renderTextureCopy(r,history.a,nullptr,nullptr,SDL_BLENDMODE_BLEND,old_alpha);
+        renderTextureCopy(r,g_post.input,nullptr,nullptr,SDL_BLENDMODE_ADD,current_alpha);
     }
-    SDL_SetRenderTarget(r,nullptr);
+    SDL_SetRenderTarget(r,previous);
     SDL_SetRenderViewport(r,nullptr);
     SDL_SetRenderScale(r,1.0f,1.0f);
-    std::swap(g_post.history_a,g_post.history_b);
-    g_post.history_valid=true;
+    std::swap(history.a,history.b);
+    history.valid=true;
 }
 
 void applySimpleOverlayShader(SDL_Renderer*r,int w,int h){
@@ -944,47 +976,22 @@ void applySimpleOverlayShader(SDL_Renderer*r,int w,int h){
             break;
     }
 }
-}
 
-void beginVisualShaderFrame(SDL_Renderer*r){
-    g_post.capturing=false;
+void applyShaderPass(SDL_Renderer*r,SDL_Texture* input,SDL_Texture* output,std::size_t slot,int w,int h){
+    if(!input||slot>=g_shader_stack.size())return;
+    g_active_shader_slot=slot;
+    g_shader=g_shader_stack[slot];
+    g_post.input=input;
     g_post.blur_ready=false;
-    if(!r||g_shader.mode==VisualShader::None||g_shader.strength<=0)return;
-    if(!shaderNeedsFrameTexture(g_shader.mode)){
-        g_post.history_valid=false;
-        return;
-    }
-    int w=0,h=0;
-    if(!SDL_GetRenderOutputSize(r,&w,&h)||w<=0||h<=0)return;
-    if(!ensureFrameTarget(r,w,h))return;
-    if(!shaderNeedsHistory(g_shader.mode))g_post.history_valid=false;
-    if(!SDL_SetRenderTarget(r,g_post.frame))return;
-    SDL_SetRenderViewport(r,nullptr);
-    SDL_SetRenderScale(r,1.0f,1.0f);
-    g_post.capturing=true;
-}
 
-void applyVisualShader(SDL_Renderer*r){
-    if(!r||g_shader.mode==VisualShader::None||g_shader.strength<=0)return;
-    int w=960,h=720;
-    if(!SDL_GetRenderOutputSize(r,&w,&h)||w<=0||h<=0){w=960;h=720;}
-
-    if(!g_post.capturing){
-        SDL_SetRenderTarget(r,nullptr);
-        SDL_SetRenderViewport(r,nullptr);
-        SDL_SetRenderScale(r,1.0f,1.0f);
-        applySimpleOverlayShader(r,w,h);
-        return;
-    }
-
-    SDL_SetRenderTarget(r,nullptr);
+    SDL_SetRenderTarget(r,output);
     SDL_SetRenderViewport(r,nullptr);
     SDL_SetRenderScale(r,1.0f,1.0f);
     clearTarget(r,{0,0,0,255});
 
     switch(g_shader.mode){
         case VisualShader::None:
-            renderTextureCopy(r,g_post.frame,nullptr,nullptr,SDL_BLENDMODE_NONE,255);
+            renderTextureCopy(r,input,nullptr,nullptr,SDL_BLENDMODE_NONE,255);
             break;
         case VisualShader::CRT:{
             const int soft=effectAlpha(g_shader.softness,105);
@@ -996,33 +1003,31 @@ void applyVisualShader(SDL_Renderer*r){
             break;
         }
         case VisualShader::Terminal:
-            renderTextureCopy(r,g_post.frame,nullptr,nullptr,SDL_BLENDMODE_NONE,255);
+            renderTextureCopy(r,input,nullptr,nullptr,SDL_BLENDMODE_NONE,255);
             renderBloom(r,w,h,g_shader.glow,35+g_shader.glow/2,55,45,{155,255,180,255});
             renderHistoryTrail(r,w,h,g_shader.persistence,g_shader.trail_length,{140,255,175,255});
             applyScanlines(r,w,h,4,1,effectAlpha(g_shader.scanlines,90));
             applyFlicker(r,w,h,effectAlpha(g_shader.flicker,95));
             updateHistory(r,g_shader.persistence);
             break;
-        case VisualShader::LCD:{
-            renderTextureCopy(r,g_post.frame,nullptr,nullptr,SDL_BLENDMODE_NONE,255);
+        case VisualShader::LCD:
+            renderTextureCopy(r,input,nullptr,nullptr,SDL_BLENDMODE_NONE,255);
             if(g_shader.softness>0)applySoftness(r,w,h,g_shader.softness);
             if(g_shader.pixel_grid>0)applyPixelGrid(r,w,h,g_shader.grid_size,g_shader.line_thickness,effectAlpha(g_shader.pixel_grid,75));
             if(g_shader.subpixel>0)applyLcdSubpixels(r,w,h,effectAlpha(g_shader.subpixel,60),g_shader.grid_size);
             break;
-        }
         case VisualShader::DotMatrix:
-            renderTextureCopy(r,g_post.frame,nullptr,nullptr,SDL_BLENDMODE_NONE,255);
-            renderTextureCopy(r,g_post.frame,nullptr,nullptr,SDL_BLENDMODE_ADD,
-                              static_cast<Uint8>(effectAlpha(g_shader.dot_brightness,40)));
+            renderTextureCopy(r,input,nullptr,nullptr,SDL_BLENDMODE_NONE,255);
+            renderTextureCopy(r,input,nullptr,nullptr,SDL_BLENDMODE_ADD,static_cast<Uint8>(effectAlpha(g_shader.dot_brightness,40)));
             applyDotMask(r,w,h,g_shader.dot_spacing,g_shader.dot_size,effectAlpha(100,245));
             break;
         case VisualShader::Bloom:
-            renderTextureCopy(r,g_post.frame,nullptr,nullptr,SDL_BLENDMODE_NONE,255);
+            renderTextureCopy(r,input,nullptr,nullptr,SDL_BLENDMODE_NONE,255);
             renderBloom(r,w,h,100,g_shader.radius,g_shader.softness,g_shader.threshold);
             break;
         case VisualShader::Scanlines:
         case VisualShader::Vignette:
-            renderTextureCopy(r,g_post.frame,nullptr,nullptr,SDL_BLENDMODE_NONE,255);
+            renderTextureCopy(r,input,nullptr,nullptr,SDL_BLENDMODE_NONE,255);
             applySimpleOverlayShader(r,w,h);
             break;
         case VisualShader::Analog:
@@ -1034,21 +1039,81 @@ void applyVisualShader(SDL_Renderer*r){
             renderChromaticFrame(r,w,h);
             break;
         case VisualShader::Ghosting:
-            renderTextureCopy(r,g_post.frame,nullptr,nullptr,SDL_BLENDMODE_NONE,255);
-            renderHistoryTrail(r,w,h,g_shader.persistence,g_shader.trail_length);
+            renderTextureCopy(r,input,nullptr,nullptr,SDL_BLENDMODE_NONE,255);
+            renderHistoryTrail(r,w,h,g_shader.persistence,g_shader.trail_length,{255,255,255,255},g_shader.ghost_glow);
             updateHistory(r,g_shader.persistence);
             break;
         case VisualShader::Arcade:
-            renderTextureCopy(r,g_post.frame,nullptr,nullptr,SDL_BLENDMODE_NONE,255);
+            renderTextureCopy(r,input,nullptr,nullptr,SDL_BLENDMODE_NONE,255);
             renderBloom(r,w,h,g_shader.bloom,45+g_shader.bloom/2,45,45);
             applyScanlines(r,w,h,4,1,effectAlpha(g_shader.scanlines,82));
             applyPixelGrid(r,w,h,8,1,effectAlpha(g_shader.pixel_grid,36));
             applyVignette(r,w,h,effectAlpha(g_shader.vignette,105),58,52);
             break;
         default:
-            renderTextureCopy(r,g_post.frame,nullptr,nullptr,SDL_BLENDMODE_NONE,255);
+            renderTextureCopy(r,input,nullptr,nullptr,SDL_BLENDMODE_NONE,255);
             break;
     }
+}
+}
+
+void beginVisualShaderFrame(SDL_Renderer*r){
+    g_post.capturing=false;
+    g_post.blur_ready=false;
+    if(!r)return;
+    bool any=false;
+    for(const auto& shader:g_shader_stack)if(shaderActive(shader)){any=true;break;}
+    if(!any)return;
+    int w=0,h=0;
+    if(!SDL_GetRenderOutputSize(r,&w,&h)||w<=0||h<=0)return;
+    if(!ensureFrameTarget(r,w,h))return;
+    if(!SDL_SetRenderTarget(r,g_post.frame))return;
+    SDL_SetRenderViewport(r,nullptr);
+    SDL_SetRenderScale(r,1.0f,1.0f);
+    g_post.capturing=true;
+}
+
+void applyVisualShader(SDL_Renderer*r){
+    if(!r||!g_post.capturing)return;
+    int w=960,h=720;
+    if(!SDL_GetRenderOutputSize(r,&w,&h)||w<=0||h<=0){w=960;h=720;}
+
+    std::array<std::size_t,kShaderSlotCount> active{};
+    int active_count=0;
+    for(std::size_t i=0;i<g_shader_stack.size();++i){
+        if(shaderActive(g_shader_stack[i]))active[static_cast<std::size_t>(active_count++)]=i;
+    }
+
+    if(active_count<=0){
+        SDL_SetRenderTarget(r,nullptr);
+        SDL_SetRenderViewport(r,nullptr);
+        SDL_SetRenderScale(r,1.0f,1.0f);
+        renderTextureCopy(r,g_post.frame,nullptr,nullptr,SDL_BLENDMODE_NONE,255);
+        g_post.capturing=false;
+        return;
+    }
+
+    if(active_count>1&&!ensurePassTargets(r)){
+        SDL_SetRenderTarget(r,nullptr);
+        SDL_SetRenderViewport(r,nullptr);
+        SDL_SetRenderScale(r,1.0f,1.0f);
+        renderTextureCopy(r,g_post.frame,nullptr,nullptr,SDL_BLENDMODE_NONE,255);
+        g_post.capturing=false;
+        return;
+    }
+
+    SDL_Texture* input=g_post.frame;
+    for(int pass=0;pass<active_count;++pass){
+        const bool last=pass==active_count-1;
+        SDL_Texture* output=nullptr;
+        if(!last)output=(pass%2==0)?g_post.pass_a:g_post.pass_b;
+        applyShaderPass(r,input,output,active[static_cast<std::size_t>(pass)],w,h);
+        if(!last)input=output;
+    }
+    SDL_SetRenderTarget(r,nullptr);
+    SDL_SetRenderViewport(r,nullptr);
+    SDL_SetRenderScale(r,1.0f,1.0f);
+    g_post.input=nullptr;
     g_post.capturing=false;
 }
 
@@ -1194,7 +1259,7 @@ void renderMenu(SDL_Renderer*r,int sel,bool tournament){
     beginCanvas(r,true);
     set(r,{11,14,20,255});SDL_RenderClear(r);
     txt(r,350,45,"FASTRIS",{235,240,248,255},true);
-    txt(r,454,50,std::string("v")+fasttris::kVersion,{120,135,155,255});
+    txt(r,478,54,std::string("v")+fasttris::kVersion,{120,135,155,255});
     txt(r,276,78,"DETERMINISTIC COMPETITIVE BLOCK ENGINE",{120,135,155,255});
     static const std::array<const char*,11> items={
         "SPRINT 40L","ULTRA 2:00","MARATHON 150L","ZEN","CHEESE RACE 40",
@@ -1445,7 +1510,12 @@ void renderMiscellaneous(SDL_Renderer*r,const AppConfig&cfg,int sel,const std::s
         }
 
         const float value_x=650.0f;
-        if(n==kMiscShadersIndex)txt(r,value_x,y,shaderName(cfg.shader),row_color,true);
+        if(n==kMiscShadersIndex){
+            int active_count=0;VisualShader only=VisualShader::None;
+            for(const auto& slot:cfg.shader_slots)if(slot.shader!=VisualShader::None){++active_count;only=slot.shader;}
+            const std::string summary=active_count==0?"NONE":active_count==1?std::string(shaderName(only)):std::to_string(active_count)+" ACTIVE";
+            txt(r,value_x,y,summary,row_color,true);
+        }
         else if(n==kMiscTexturesIndex)txt(r,value_x,y,textureName(cfg.texture),row_color,true);
         else if(n==kMiscPalettesIndex)txt(r,value_x,y,paletteName(cfg.palette),row_color,true);
         else if(n==kMiscPalettePiecesIndex){
@@ -1607,58 +1677,61 @@ void renderTextureSettings(SDL_Renderer*r,const AppConfig&cfg,int sel){
     txt(r,80,630,"UP/DOWN select   LEFT/RIGHT change   ENTER cycle/open   ESC back",{135,145,160,255});
 }
 
-void renderShaderSettings(SDL_Renderer*r,const AppConfig&cfg,int sel){
+void renderShaderSettings(SDL_Renderer*r,const AppConfig&cfg,int sel,int shader_slot){
     beginCanvas(r,true);
     set(r,{11,14,20,255});SDL_RenderClear(r);
     txt(r,342,26,"SHADERS",{235,240,248,255},true);
-    txt(r,230,66,"Controls change with the selected shader and apply immediately.",{145,155,170,255});
+    txt(r,180,66,"Eight ordered slots can be combined; every shader keeps its own saved settings.",{145,155,170,255});
 
-    const auto controls=shaderControls(cfg.shader);
-    const int back_index=static_cast<int>(controls.size())+1;
+    const int slot=std::clamp(shader_slot,0,static_cast<int>(kShaderSlotCount)-1);
+    const VisualShader shader=cfg.shader_slots[static_cast<std::size_t>(slot)].shader;
+    const auto controls=shaderControls(shader);
+    const int back_index=static_cast<int>(controls.size())+2;
     const int item_count=back_index+1;
-    const float first_y=110.0f;
+    const float first_y=105.0f;
     const float available_h=430.0f;
-    const float step=std::clamp(available_h/std::max(1,item_count),42.0f,58.0f);
-    const float frame_h=std::min(46.0f,step-4.0f);
+    const float step=std::clamp(available_h/std::max(1,item_count),39.0f,54.0f);
+    const float frame_h=std::min(43.0f,step-3.0f);
 
     auto drawRow=[&](int index,const std::string&label,const std::string&value,bool accent=false){
         const float y=first_y+step*index;
         const bool selected=index==sel;
-        if(selected)fill(r,205,y-8,550,frame_h,{20,27,37,255});
-        outline(r,205,y-8,550,frame_h,selected?C{120,220,255,255}:C{45,55,70,255});
+        if(selected)fill(r,205,y-7,550,frame_h,{20,27,37,255});
+        outline(r,205,y-7,550,frame_h,selected?C{120,220,255,255}:C{45,55,70,255});
         const C label_color=selected?C{120,220,255,255}:accent?C{245,180,110,255}:C{210,215,225,255};
-        txt(r,226,y+5,(selected?"> ":"  ")+label,label_color,true);
-        if(!value.empty())txt(r,565,y+8,value,selected?C{150,230,255,255}:C{155,205,220,255});
+        txt(r,226,y+4,(selected?"> ":"  ")+label,label_color,true);
+        if(!value.empty())txt(r,565,y+7,value,selected?C{150,230,255,255}:C{155,205,220,255});
     };
 
-    drawRow(0,"SHADER",shaderName(cfg.shader));
+    drawRow(0,"SLOT",std::to_string(slot+1)+" / "+std::to_string(kShaderSlotCount));
+    drawRow(1,"SHADER",shaderName(shader));
     for(std::size_t i=0;i<controls.size();++i){
-        drawRow(static_cast<int>(i)+1,shaderControlName(controls[i]),shaderControlValueText(cfg,controls[i]));
+        drawRow(static_cast<int>(i)+2,shaderControlName(controls[i]),shaderControlValueText(cfg,static_cast<std::size_t>(slot),controls[i]));
     }
     drawRow(back_index,"BACK","",true);
 
     const char* desc1="";
     const char* desc2="";
-    switch(cfg.shader){
-        case VisualShader::None: desc1="Clean default output with no post-processing.";desc2="Choose another shader to reveal its own controls.";break;
-        case VisualShader::CRT: desc1="CRT exposes scanlines, spacing, glow, true image curvature, vignette and softness.";desc2="Curvature warps the rendered frame itself instead of painting fake dark corners.";break;
-        case VisualShader::Terminal: desc1="Terminal combines the old Terminal and Phosphor effects.";desc2="Glow, trails, scanlines and flicker now share one shader.";break;
-        case VisualShader::LCD: desc1="LCD combines the old LCD and Pixel Grid effects.";desc2="Set Subpixel or Softness to 0 to disable either effect.";break;
+    switch(shader){
+        case VisualShader::None: desc1="This slot is disabled and costs no shader pass.";desc2="Choose a shader here, then use another slot to stack additional effects.";break;
+        case VisualShader::CRT: desc1="CRT exposes scanlines, spacing, glow, true image curvature, vignette and softness.";desc2="Its values are independent from every other shader profile and slot.";break;
+        case VisualShader::Terminal: desc1="Terminal combines terminal phosphor glow, trails, scanlines and flicker.";desc2="Stack it before or after other slots to change how the composite behaves.";break;
+        case VisualShader::LCD: desc1="LCD combines pixel grid, RGB subpixels and softness.";desc2="Set Subpixel or Softness to 0 to disable either component completely.";break;
         case VisualShader::DotMatrix: desc1="Dot Matrix exposes dot size, spacing and dot brightness.";desc2="The pattern can range from fine texture to chunky matrix cells.";break;
         case VisualShader::Bloom: desc1="Bloom exposes radius, threshold and softness.";desc2="Higher softness spreads the glow; threshold controls how restrained it feels.";break;
-        case VisualShader::Scanlines: desc1="Scanlines exposes spacing and line thickness.";desc2="A lightweight display effect with no extra CRT treatment.";break;
+        case VisualShader::Scanlines: desc1="Scanlines exposes spacing and line thickness.";desc2="Useful as a lightweight extra pass on top of another display shader.";break;
         case VisualShader::Vignette: desc1="Vignette exposes radius and softness.";desc2="Lower radius makes the darkened edge region reach further inward.";break;
-        case VisualShader::Analog: desc1="Analog exposes noise, flicker, horizontal jitter and distortion.";desc2="Keep values low for subtle instability or push them for a damaged signal look.";break;
+        case VisualShader::Analog: desc1="Analog exposes noise, flicker, horizontal jitter and distortion.";desc2="Its position in the slot stack decides whether later effects distort the noisy signal too.";break;
         case VisualShader::Chromatic: desc1="Chromatic exposes RGB offset and direction.";desc2="Direction cycles horizontal, vertical and two diagonal variants.";break;
-        case VisualShader::Ghosting: desc1="Ghosting exposes persistence and trail length.";desc2="Higher values make the display afterimage treatment more obvious.";break;
-        case VisualShader::Arcade: desc1="Arcade exposes its bloom, scanlines, vignette and pixel-grid mix.";desc2="Tune the four components independently while Strength controls the whole effect.";break;
+        case VisualShader::Ghosting: desc1="Ghosting has persistence, trail length and Ghost Glow from 0 to 10.";desc2="Ghost Glow brightens only the afterimages, not the live frame.";break;
+        case VisualShader::Arcade: desc1="Arcade exposes its bloom, scanlines, vignette and pixel-grid mix.";desc2="Tune the components independently while Strength controls this whole pass.";break;
         default:break;
     }
 
     txt(r,205,565,desc1,{155,168,185,255});
     txt(r,205,590,desc2,{155,168,185,255});
-    txt(r,205,628,"UP/DOWN select   LEFT/RIGHT change   ENTER cycle/open   ESC back",{135,145,160,255});
-    txt(r,205,652,"All shader settings are presentation-only and saved in fastris.cfg.",{125,175,190,255});
+    txt(r,205,628,"UP/DOWN select   LEFT/RIGHT change   ENTER cycle   ESC back",{135,145,160,255});
+    txt(r,205,652,"Slots run from 1 to 8 in order; NONE slots are skipped.",{125,175,190,255});
 }
 
 void renderHelp(SDL_Renderer*r){beginCanvas(r,true);set(r,{11,14,20,255});SDL_RenderClear(r);txt(r,360,35,"HELP",{235,240,248,255},true);std::array<const char*,17> l={"Gameplay uses SDL event nanosecond timestamps.","OS key repeat is ignored; DAS/ARR are engine-driven.","Same seed + rules + input events = same simulation.","","Default keys:","Arrows: left/right/down    Space: hard drop","Up: rotate CW             Z: rotate CCW","A: rotate 180             C: hold","P: pause                  F5: restart","F6: save replay to file   ESC: menu","","Replay viewer:","Space pause, Left/Right seek 1 second","1/2/4/8 speed, N next piece, F6 save copy","","Seed and control rebinding are available from Settings.","Command line: --seed N --mode sprint --replay file"};for(int n=0;n<(int)l.size();++n)txt(r,160,105+n*30,l[n],{190,198,210,255},n<3);txt(r,160,660,"ESC back",{130,140,155,255});}

@@ -79,7 +79,7 @@ void renderControls(SDL_Renderer* r, const AppConfig& cfg, int selected, bool re
 void renderMiscellaneous(SDL_Renderer* r, const AppConfig& cfg, int selected, const std::string& status);
 void renderPaletteSettings(SDL_Renderer* r, const AppConfig& cfg, int selected);
 void renderTextureSettings(SDL_Renderer* r, const AppConfig& cfg, int selected);
-void renderShaderSettings(SDL_Renderer* r, const AppConfig& cfg, int selected);
+void renderShaderSettings(SDL_Renderer* r, const AppConfig& cfg, int selected, int shader_slot);
 void renderHelp(SDL_Renderer* r);
 
 } // namespace fasttris::app
