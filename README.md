@@ -41,6 +41,7 @@ Gameplay simulation is independent from rendering. The same seed, rules, and tim
 - Sprint, Ultra, Marathon, Zen, Cheese Race, Finesse, Seed Race, and Sandbox modes
 - Live PPS, APM, KPP, attack, combo, B2B, T-Spin, Perfect Clear, and finesse statistics
 - Deterministic replay recording, playback, SHA-256 verification, and a headless verifier
+- Human-readable replay inspection with `python scripts/decode_replay.py <file.ftr>`.
 - Keyboard and gamepad rebinding
 - High-refresh and uncapped rendering options
 - Tournament rules lock

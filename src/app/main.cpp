@@ -13,6 +13,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cstdint>
+#include <ctime>
 #include <cstdlib>
 #include <filesystem>
 #include <iostream>
@@ -107,6 +108,36 @@ std::string preferenceRoot() {
     std::string out(raw);
     SDL_free(raw);
     return out;
+}
+
+std::string replayModeFilenameWord(Mode mode) {
+    // Mode::Custom is presented to players as SANDBOX in the mode menu.
+    std::string name = mode == Mode::Custom ? "Sandbox" : std::string(modeName(mode));
+    const auto space = name.find(' ');
+    if (space != std::string::npos) name.resize(space);
+    name.erase(std::remove_if(name.begin(), name.end(), [](unsigned char c) {
+        return !((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9'));
+    }), name.end());
+    return name.empty() ? "Unknown" : name;
+}
+
+std::string replayTimestampForFilename() {
+    const std::time_t raw = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
+    std::tm local{};
+#if defined(_WIN32)
+    if (localtime_s(&local, &raw) != 0) return "0000-00-00_00-00-00";
+#else
+    if (!localtime_r(&raw, &local)) return "0000-00-00_00-00-00";
+#endif
+    char timestamp[20]{};
+    if (std::strftime(timestamp, sizeof(timestamp), "%Y-%m-%d_%H-%M-%S", &local) == 0)
+        return "0000-00-00_00-00-00";
+    return timestamp;
+}
+
+std::string replaySuggestedFilename(const Replay& replay) {
+    return "FasTris_replay_" + replayModeFilenameWord(replay.mode) + "_" +
+           replayTimestampForFilename() + ".ftr";
 }
 
 enum class ReplayDialogAction { Load, Save };
@@ -700,7 +731,7 @@ struct AppState {
             if(from_game)run.status="REPLAY ENCODE FAILED";else replay_status="REPLAY ENCODE FAILED";
             return;
         }
-        const std::string filename="FasTris-Replay-"+std::to_string(replay.seed)+".ftr";
+        const std::string filename=replaySuggestedFilename(replay);
         webDownloadReplayFile(filename.c_str(),bytes.data(),static_cast<int>(bytes.size()));
         if(from_game)run.status="REPLAY DOWNLOAD STARTED";
         else replay_status="REPLAY DOWNLOAD STARTED";
@@ -718,7 +749,8 @@ struct AppState {
         if(from_game)run.status="CHOOSE REPLAY FILE";
         else replay_status="CHOOSE REPLAY FILE";
         auto* context=new ReplayDialogContext{replay_dialog_mailbox,ReplayDialogAction::Save};
-        SDL_ShowSaveFileDialog(replayDialogCallback,context,win,kReplayFilters,1,nullptr);
+        const std::string suggested_filename=replaySuggestedFilename(replay);
+        SDL_ShowSaveFileDialog(replayDialogCallback,context,win,kReplayFilters,1,suggested_filename.c_str());
 #endif
     }
 
