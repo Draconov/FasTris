@@ -61,7 +61,9 @@ inline constexpr int kMiscItemCount = 3;
 void setVisualPalette(VisualPalette palette);
 void setVisualTexture(const AppConfig& cfg);
 void setVisualShader(const AppConfig& cfg);
+void beginVisualShaderFrame(SDL_Renderer* r);
 void applyVisualShader(SDL_Renderer* r);
+void shutdownVisualShaderPipeline();
 
 void renderGame(SDL_Renderer* r, Game& g, const RenderInfo& info);
 void renderMenu(SDL_Renderer* r, int selected, bool tournament);

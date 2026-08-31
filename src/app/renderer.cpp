@@ -72,6 +72,32 @@ struct ShaderRuntime {
 };
 ShaderRuntime g_shader{};
 
+constexpr int kWarpCols=32;
+constexpr int kWarpRows=24;
+constexpr int kWarpVertexCount=(kWarpCols+1)*(kWarpRows+1);
+constexpr int kWarpIndexCount=kWarpCols*kWarpRows*6;
+struct PostProcessRuntime {
+    SDL_Renderer* renderer{};
+    SDL_Texture* frame{};
+    SDL_Texture* blur{};
+    SDL_Texture* history_a{};
+    SDL_Texture* history_b{};
+    int width{};
+    int height{};
+    bool capturing{};
+    bool target_unavailable{};
+    bool history_valid{};
+    bool blur_ready{};
+    std::array<SDL_Vertex,kWarpVertexCount> warp_vertices{};
+    std::array<int,kWarpIndexCount> warp_indices{};
+    int warp_width{-1};
+    int warp_height{-1};
+    int warp_curve_key{-1};
+    int warp_alpha_key{-1};
+    bool warp_indices_ready{};
+};
+PostProcessRuntime g_post{};
+
 Uint8 clampByte(int value){return static_cast<Uint8>(std::clamp(value,0,255));}
 C paletteColor(C c){
     if(g_visual_palette==VisualPalette::Default)return c;
@@ -361,6 +387,7 @@ void setVisualTexture(const AppConfig& cfg){
 }
 
 void setVisualShader(const AppConfig& cfg){
+    const VisualShader previous_mode=g_shader.mode;
     g_shader.mode=cfg.shader;
     g_shader.strength=cfg.shader_strength;
     g_shader.scanlines=cfg.shader_scanlines;
@@ -388,6 +415,7 @@ void setVisualShader(const AppConfig& cfg){
     g_shader.direction=cfg.shader_direction;
     g_shader.line_thickness=cfg.shader_line_thickness;
     g_shader.bloom=cfg.shader_bloom;
+    if(previous_mode!=g_shader.mode)g_post.history_valid=false;
 }
 
 namespace {
@@ -399,207 +427,536 @@ int effectAlpha(int local_percent,int max_alpha=255){
     const int strength=std::clamp(g_shader.strength,0,100);
     return std::clamp(max_alpha*local*strength/10000,0,255);
 }
+
+bool shaderNeedsFrameTexture(VisualShader shader){
+    switch(shader){
+        case VisualShader::CRT:
+        case VisualShader::Terminal:
+        case VisualShader::LCD:
+        case VisualShader::DotMatrix:
+        case VisualShader::Bloom:
+        case VisualShader::Phosphor:
+        case VisualShader::Analog:
+        case VisualShader::Chromatic:
+        case VisualShader::Ghosting:
+        case VisualShader::Arcade:
+            return true;
+        case VisualShader::None:
+        case VisualShader::Scanlines:
+        case VisualShader::Vignette:
+        case VisualShader::PixelGrid:
+        default:
+            return false;
+    }
+}
+
+bool shaderNeedsHistory(VisualShader shader){
+    return shader==VisualShader::Terminal||shader==VisualShader::Phosphor||shader==VisualShader::Ghosting;
+}
+
+void destroyTexture(SDL_Texture*& texture){
+    if(texture){SDL_DestroyTexture(texture);texture=nullptr;}
+}
+
+void destroyPostTargets(){
+    destroyTexture(g_post.frame);
+    destroyTexture(g_post.blur);
+    destroyTexture(g_post.history_a);
+    destroyTexture(g_post.history_b);
+    g_post.width=0;
+    g_post.height=0;
+    g_post.capturing=false;
+    g_post.history_valid=false;
+    g_post.blur_ready=false;
+    g_post.warp_width=-1;
+    g_post.warp_height=-1;
+    g_post.warp_curve_key=-1;
+    g_post.warp_alpha_key=-1;
+}
+
+SDL_Texture* makeTarget(SDL_Renderer* r,int w,int h,SDL_ScaleMode scale_mode=SDL_SCALEMODE_LINEAR){
+    if(w<=0||h<=0)return nullptr;
+    SDL_Texture* texture=SDL_CreateTexture(r,SDL_PIXELFORMAT_RGBA8888,SDL_TEXTUREACCESS_TARGET,w,h);
+    if(!texture)return nullptr;
+    SDL_SetTextureBlendMode(texture,SDL_BLENDMODE_BLEND);
+    SDL_SetTextureScaleMode(texture,scale_mode);
+    return texture;
+}
+
+bool ensureFrameTarget(SDL_Renderer* r,int w,int h){
+    if(g_post.renderer!=r){
+        destroyPostTargets();
+        g_post.renderer=r;
+        g_post.target_unavailable=false;
+    }
+    if(g_post.target_unavailable)return false;
+    if(g_post.frame&&g_post.width==w&&g_post.height==h)return true;
+    destroyPostTargets();
+    g_post.renderer=r;
+    g_post.frame=makeTarget(r,w,h,SDL_SCALEMODE_LINEAR);
+    if(!g_post.frame){
+        g_post.target_unavailable=true;
+        return false;
+    }
+    g_post.width=w;
+    g_post.height=h;
+    return true;
+}
+
+bool ensureBlurTarget(SDL_Renderer* r){
+    if(g_post.blur)return true;
+    const int bw=std::max(1,g_post.width/4);
+    const int bh=std::max(1,g_post.height/4);
+    g_post.blur=makeTarget(r,bw,bh,SDL_SCALEMODE_LINEAR);
+    return g_post.blur!=nullptr;
+}
+
+bool ensureHistoryTargets(SDL_Renderer* r){
+    if(g_post.history_a&&g_post.history_b)return true;
+    destroyTexture(g_post.history_a);
+    destroyTexture(g_post.history_b);
+    const int hw=std::max(1,g_post.width/2);
+    const int hh=std::max(1,g_post.height/2);
+    g_post.history_a=makeTarget(r,hw,hh,SDL_SCALEMODE_LINEAR);
+    g_post.history_b=makeTarget(r,hw,hh,SDL_SCALEMODE_LINEAR);
+    g_post.history_valid=false;
+    if(!g_post.history_a||!g_post.history_b){
+        destroyTexture(g_post.history_a);
+        destroyTexture(g_post.history_b);
+        return false;
+    }
+    return true;
+}
+
+void resetTextureState(SDL_Texture* texture){
+    if(!texture)return;
+    SDL_SetTextureBlendMode(texture,SDL_BLENDMODE_BLEND);
+    SDL_SetTextureColorMod(texture,255,255,255);
+    SDL_SetTextureAlphaMod(texture,255);
+}
+
+void renderTextureCopy(SDL_Renderer* r,SDL_Texture* texture,const SDL_FRect* src,const SDL_FRect* dst,
+                       SDL_BlendMode blend=SDL_BLENDMODE_BLEND,Uint8 alpha_mod=255,
+                       Uint8 red=255,Uint8 green=255,Uint8 blue=255){
+    if(!texture)return;
+    SDL_SetTextureBlendMode(texture,blend);
+    SDL_SetTextureColorMod(texture,red,green,blue);
+    SDL_SetTextureAlphaMod(texture,alpha_mod);
+    SDL_RenderTexture(r,texture,src,dst);
+    resetTextureState(texture);
+}
+
+void clearTarget(SDL_Renderer* r,C color={0,0,0,255}){
+    SDL_SetRenderDrawColor(r,color.r,color.g,color.b,color.a);
+    SDL_RenderClear(r);
+}
+
+bool prepareBlur(SDL_Renderer* r){
+    if(g_post.blur_ready&&g_post.blur)return true;
+    if(!ensureBlurTarget(r))return false;
+    SDL_SetRenderTarget(r,g_post.blur);
+    SDL_SetRenderViewport(r,nullptr);
+    SDL_SetRenderScale(r,1.0f,1.0f);
+    clearTarget(r,{0,0,0,255});
+    renderTextureCopy(r,g_post.frame,nullptr,nullptr,SDL_BLENDMODE_NONE,255);
+    SDL_SetRenderTarget(r,nullptr);
+    SDL_SetRenderViewport(r,nullptr);
+    SDL_SetRenderScale(r,1.0f,1.0f);
+    g_post.blur_ready=true;
+    return true;
+}
+
 void applyScanlines(SDL_Renderer*r,int w,int h,int spacing,int thickness,int alpha){
+    if(alpha<=0)return;
     spacing=std::max(2,spacing);thickness=std::clamp(thickness,1,std::max(1,spacing-1));
-    for(int y=0;y<h;y+=spacing)fillAbs(r,0,float(y),float(w),float(thickness),{0,0,0,static_cast<Uint8>(std::clamp(alpha,0,255))});
+    static std::array<SDL_FRect,4096> rects{};
+    int count=0;
+    for(int y=0;y<h&&count<int(rects.size());y+=spacing)rects[static_cast<std::size_t>(count++)]={0,float(y),float(w),float(thickness)};
+    if(count>0){const Uint8 a=static_cast<Uint8>(std::clamp(alpha,0,255));setRaw(r,{0,0,0,a});SDL_RenderFillRects(r,rects.data(),count);}
 }
+
 void applyPixelGrid(SDL_Renderer*r,int w,int h,int step,int thickness,int alpha){
+    if(alpha<=0)return;
     step=std::max(4,step);thickness=std::clamp(thickness,1,std::max(1,step-1));
-    const Uint8 light=static_cast<Uint8>(std::clamp(alpha,0,255));
-    const Uint8 dark=static_cast<Uint8>(std::clamp(alpha/2,0,255));
-    for(int x=0;x<w;x+=step)fillAbs(r,float(x),0,float(thickness),float(h),{255,255,255,light});
-    for(int y=0;y<h;y+=step)fillAbs(r,0,float(y),float(w),float(thickness),{0,0,0,dark});
+    static std::array<SDL_FRect,4096> vertical{};
+    static std::array<SDL_FRect,4096> horizontal{};
+    int vc=0,hc=0;
+    for(int x=0;x<w&&vc<int(vertical.size());x+=step)vertical[static_cast<std::size_t>(vc++)]={float(x),0,float(thickness),float(h)};
+    for(int y=0;y<h&&hc<int(horizontal.size());y+=step)horizontal[static_cast<std::size_t>(hc++)]={0,float(y),float(w),float(thickness)};
+    if(vc>0){const Uint8 light=static_cast<Uint8>(std::clamp(alpha,0,255));setRaw(r,{255,255,255,light});SDL_RenderFillRects(r,vertical.data(),vc);}
+    if(hc>0){const Uint8 dark=static_cast<Uint8>(std::clamp(alpha*3/4,0,255));setRaw(r,{0,0,0,dark});SDL_RenderFillRects(r,horizontal.data(),hc);}
 }
-void applyDotMatrix(SDL_Renderer*r,int w,int h,int spacing,int dot_size,int alpha){
+
+void applyDotMask(SDL_Renderer*r,int w,int h,int spacing,int dot_size,int alpha){
+    if(alpha<=0)return;
     spacing=std::max(4,spacing);dot_size=std::clamp(dot_size,1,std::max(1,spacing-1));
-    const Uint8 a=static_cast<Uint8>(std::clamp(alpha,0,255));
-    for(int y=spacing/2;y<h;y+=spacing)for(int x=spacing/2;x<w;x+=spacing)
-        fillAbs(r,float(x),float(y),float(dot_size),float(dot_size),{255,255,255,a});
+    const int mask=std::max(1,spacing-dot_size);
+    static std::array<SDL_FRect,4096> rects{};
+    int count=0;
+    for(int x=dot_size;x<w&&count<int(rects.size());x+=spacing)rects[static_cast<std::size_t>(count++)]={float(x),0,float(mask),float(h)};
+    for(int y=dot_size;y<h&&count<int(rects.size());y+=spacing)rects[static_cast<std::size_t>(count++)]={0,float(y),float(w),float(mask)};
+    if(count>0){const Uint8 a=static_cast<Uint8>(std::clamp(alpha,0,255));setRaw(r,{0,0,0,a});SDL_RenderFillRects(r,rects.data(),count);}
 }
+
 void applyVignette(SDL_Renderer*r,int w,int h,int alpha,int radius,int softness){
     if(alpha<=0)return;
-    const int layers=6+std::clamp(softness,0,100)/8;
-    const float radius_scale=0.35f+0.60f*(std::clamp(radius,0,100)/100.0f);
-    const float max_x=w*(1.0f-radius_scale)*0.5f;
-    const float max_y=h*(1.0f-radius_scale)*0.5f;
+    const float reach=(1.0f-std::clamp(radius,0,100)/100.0f)*0.30f+0.035f;
+    const float max_inset=std::min(w,h)*reach;
+    const int layers=std::clamp(12+softness/3,12,44);
+    const float thickness=std::max(1.0f,std::min(w,h)/720.0f);
     for(int i=0;i<layers;++i){
-        const float t=float(i+1)/layers;
-        const Uint8 a=static_cast<Uint8>(std::clamp(int(alpha*t*t),0,255));
-        const float ix=max_x*t,iy=max_y*t;
-        fillAbs(r,0,0,float(w),std::max(1.0f,iy/layers),{0,0,0,a});
-        fillAbs(r,0,float(h)-std::max(1.0f,iy/layers),float(w),std::max(1.0f,iy/layers),{0,0,0,a});
-        fillAbs(r,0,0,std::max(1.0f,ix/layers),float(h),{0,0,0,a});
-        fillAbs(r,float(w)-std::max(1.0f,ix/layers),0,std::max(1.0f,ix/layers),float(h),{0,0,0,a});
+        const float outer=float(i)/layers;
+        const float inset=max_inset*outer;
+        const float falloff=1.0f-outer;
+        const float shaped=falloff*falloff*(0.35f+0.65f*(softness/100.0f));
+        const Uint8 a=static_cast<Uint8>(std::clamp(int(alpha*shaped),0,255));
+        if(a==0)continue;
+        fillAbs(r,inset,inset,float(w)-2*inset,thickness,{0,0,0,a});
+        fillAbs(r,inset,float(h)-inset-thickness,float(w)-2*inset,thickness,{0,0,0,a});
+        fillAbs(r,inset,inset,thickness,float(h)-2*inset,{0,0,0,a});
+        fillAbs(r,float(w)-inset-thickness,inset,thickness,float(h)-2*inset,{0,0,0,a});
     }
 }
-void applyCurvature(SDL_Renderer*r,int w,int h,int alpha,int curvature){
-    if(curvature<=0||alpha<=0)return;
-    const float curve=(curvature/100.0f)*std::min(w,h)*0.10f;
-    const int band=std::max(24,std::min(w,h)/4);
-    for(int y=0;y<h;++y){
-        const int edge=std::min(y,h-1-y);if(edge>=band)continue;
-        const float t=float(band-edge)/band;const float inset=curve*t*t;
-        const Uint8 a=static_cast<Uint8>(std::clamp(int(alpha*t),0,255));
-        if(inset>0.5f){fillAbs(r,0,float(y),inset,1,{0,0,0,a});fillAbs(r,float(w)-inset,float(y),inset,1,{0,0,0,a});}
-    }
-    for(int x=0;x<w;++x){
-        const int edge=std::min(x,w-1-x);if(edge>=band)continue;
-        const float t=float(band-edge)/band;const float inset=curve*t*t;
-        const Uint8 a=static_cast<Uint8>(std::clamp(int(alpha*t),0,255));
-        if(inset>0.5f){fillAbs(r,float(x),0,1,inset,{0,0,0,a});fillAbs(r,float(x),float(h)-inset,1,inset,{0,0,0,a});}
-    }
-    outlineAbs(r,2,2,float(w)-4,float(h)-4,{255,255,255,static_cast<Uint8>(std::clamp(alpha/4,0,255))});
-}
-void applyBloom(SDL_Renderer*r,int w,int h,int alpha,int radius,int softness,C tint={255,255,255,255}){
-    if(alpha<=0)return;
-    const Uint8 haze=static_cast<Uint8>(std::clamp(alpha/(12-std::min(8,softness/13)),0,255));
-    fillAbs(r,0,0,float(w),float(h),{tint.r,tint.g,tint.b,haze});
-    const int bands=2+std::clamp(softness,0,100)/20;
-    const float extent=0.12f+0.33f*(std::clamp(radius,0,100)/100.0f);
-    const float cx=w*0.5f,cy=h*0.5f;
-    for(int i=0;i<bands;++i){
-        const float t=float(i+1)/bands;
-        const float bw=w*extent*t,bh=h*extent*t;
-        fillAbs(r,cx-bw,cy-bh,bw*2,bh*2,{tint.r,tint.g,tint.b,static_cast<Uint8>(std::clamp(alpha/(8+i*2),0,255))});
-    }
-}
+
 void applyFlicker(SDL_Renderer*r,int w,int h,int alpha){
     if(alpha<=0)return;
     const Uint64 tick=SDL_GetTicks();
-    const int pulse=int((tick/19)%17);
-    const int a=alpha*(4+pulse%5)/8;
-    if((tick/73)%2==0)fillAbs(r,0,0,float(w),float(h),{255,255,255,static_cast<Uint8>(std::clamp(a/8,0,255))});
-    else fillAbs(r,0,0,float(w),float(h),{0,0,0,static_cast<Uint8>(std::clamp(a/10,0,255))});
+    const float phase=std::sin(float(tick%4000u)*0.021f)+0.45f*std::sin(float(tick%2100u)*0.063f);
+    const int pulse=std::clamp(int(alpha*(0.4f+0.3f*phase)),0,alpha);
+    if((tick/71u)%2u==0u)fillAbs(r,0,0,float(w),float(h),{255,255,255,static_cast<Uint8>(std::max(0,pulse/10))});
+    else fillAbs(r,0,0,float(w),float(h),{0,0,0,static_cast<Uint8>(std::max(0,pulse/12))});
 }
-void applyAnalogNoise(SDL_Renderer*r,int w,int h,int noise_alpha,int jitter_alpha,int distortion_alpha){
-    const Uint64 tick=SDL_GetTicks();
-    const int lines=4+std::clamp(g_shader.noise,0,100)/6;
-    for(int i=0;i<lines;++i){
-        const int y=int((tick/7+i*53)%std::max(1,h-2));
-        const int len=50+int((tick/11+i*97)%std::max(51,w/2));
-        const int max_x=std::max(1,w-len);
-        const int jitter=(g_shader.horizontal_jitter*(i%3-1)*w)/3000;
-        const int x=std::clamp(int((tick/13+i*131)%max_x)+jitter,0,std::max(0,w-len));
-        fillAbs(r,float(x),float(y),float(len),1,{255,255,255,static_cast<Uint8>(std::clamp(noise_alpha,0,255))});
+
+void prepareWarpMesh(int w,int h,int curvature,int strength,float alpha){
+    const int curve_key=std::clamp(curvature,0,100)*101+std::clamp(strength,0,100);
+    const int alpha_key=std::clamp(int(alpha*1000.0f+0.5f),0,1000);
+    if(g_post.warp_width==w&&g_post.warp_height==h&&g_post.warp_curve_key==curve_key&&g_post.warp_alpha_key==alpha_key)return;
+
+    if(!g_post.warp_indices_ready){
+        int index=0;
+        for(int y=0;y<kWarpRows;++y){
+            for(int x=0;x<kWarpCols;++x){
+                const int a=y*(kWarpCols+1)+x;
+                const int b=a+1;
+                const int c=a+(kWarpCols+1);
+                const int d=c+1;
+                g_post.warp_indices[static_cast<std::size_t>(index++)]=a;
+                g_post.warp_indices[static_cast<std::size_t>(index++)]=b;
+                g_post.warp_indices[static_cast<std::size_t>(index++)]=d;
+                g_post.warp_indices[static_cast<std::size_t>(index++)]=a;
+                g_post.warp_indices[static_cast<std::size_t>(index++)]=d;
+                g_post.warp_indices[static_cast<std::size_t>(index++)]=c;
+            }
+        }
+        g_post.warp_indices_ready=true;
     }
-    for(int i=0;i<3+g_shader.distortion/20;++i){
-        const int y=int((tick/37+i*101)%std::max(1,h-6));
-        const int height=1+g_shader.distortion/35;
-        fillAbs(r,float(std::max(0,(i-1)*g_shader.horizontal_jitter/4)),float(y),float(w),float(height),{0,0,0,static_cast<Uint8>(std::clamp(distortion_alpha,0,255))});
-    }
-    if(jitter_alpha>0){
-        for(int i=0;i<3;++i){const int y=int((tick/23+i*149)%std::max(1,h));fillAbs(r,0,float(y),float(w),1,{255,255,255,static_cast<Uint8>(std::clamp(jitter_alpha/3,0,255))});}
-    }
-}
-void applyChromatic(SDL_Renderer*r,int w,int h,int alpha,int offset,int direction){
-    if(alpha<=0||offset<=0)return;
-    const Uint8 a=static_cast<Uint8>(std::clamp(alpha,0,255));
-    const int step=std::max(6,offset*4+4);
-    if(direction==0||direction==2||direction==3){
-        for(int x=0;x<w;x+=step){
-            fillAbs(r,float(x),0,1,float(h),{255,70,80,static_cast<Uint8>(a/3)});
-            fillAbs(r,float(std::min(w-1,x+offset)),0,1,float(h),{70,180,255,static_cast<Uint8>(a/3)});
+
+    const float curve=std::clamp(curvature,0,100)/100.0f;
+    const float global=0.35f+0.65f*(std::clamp(strength,0,100)/100.0f);
+    const float warp=0.22f*curve*global;
+    const float margin=warp*0.34f;
+    const float half_w=w*(0.5f-margin);
+    const float half_h=h*(0.5f-margin);
+    int vertex=0;
+    for(int y=0;y<=kWarpRows;++y){
+        const float v=float(y)/kWarpRows;
+        const float ny=v*2.0f-1.0f;
+        for(int x=0;x<=kWarpCols;++x){
+            const float u=float(x)/kWarpCols;
+            const float nx=u*2.0f-1.0f;
+            const float bend_x=1.0f-warp*ny*ny;
+            const float bend_y=1.0f-warp*nx*nx;
+            SDL_Vertex& out=g_post.warp_vertices[static_cast<std::size_t>(vertex++)];
+            out.position={w*0.5f+nx*half_w*bend_x,h*0.5f+ny*half_h*bend_y};
+            out.color={1.0f,1.0f,1.0f,alpha};
+            out.tex_coord={u,v};
         }
     }
-    if(direction==1||direction==2||direction==3){
-        for(int y=0;y<h;y+=step){
-            const int shifted=(direction==3)?-offset:offset;
-            fillAbs(r,0,float(y),float(w),1,{255,70,80,static_cast<Uint8>(a/3)});
-            fillAbs(r,0,float(std::clamp(y+shifted,0,h-1)),float(w),1,{70,180,255,static_cast<Uint8>(a/3)});
-        }
-    }
+    g_post.warp_width=w;
+    g_post.warp_height=h;
+    g_post.warp_curve_key=curve_key;
+    g_post.warp_alpha_key=alpha_key;
 }
-void applyGhosting(SDL_Renderer*r,int w,int h,int alpha,int persistence,int trails){
+
+void renderWarpedFrame(SDL_Renderer*r,int w,int h,float alpha=1.0f){
+    prepareWarpMesh(w,h,g_shader.curvature,g_shader.strength,alpha);
+    SDL_SetTextureBlendMode(g_post.frame,SDL_BLENDMODE_BLEND);
+    SDL_RenderGeometry(r,g_post.frame,g_post.warp_vertices.data(),kWarpVertexCount,
+                       g_post.warp_indices.data(),kWarpIndexCount);
+    resetTextureState(g_post.frame);
+}
+
+void renderBloom(SDL_Renderer*r,int w,int h,int amount,int radius,int softness,int threshold,
+                 C tint={255,255,255,255}){
+    const int base_alpha=effectAlpha(amount,120);
+    if(base_alpha<=0||!prepareBlur(r))return;
+    const float threshold_factor=1.0f-0.70f*(std::clamp(threshold,0,100)/100.0f);
+    const int alpha=std::clamp(int(base_alpha*threshold_factor),0,170);
     if(alpha<=0)return;
-    trails=std::clamp(trails,1,8);
-    const int distance=1+std::clamp(persistence,0,100)/20;
-    for(int i=0;i<trails;++i){
-        const int off=(i+1)*distance;
-        if(off*2>=w||off*2>=h)break;
-        outlineAbs(r,float(off),float(off),float(w-off*2),float(h-off*2),{170,220,255,static_cast<Uint8>(std::clamp(alpha/(2+i),0,255))});
+    const float spread=1.0f+std::clamp(radius,0,100)*0.12f;
+    const int taps=std::clamp(4+softness/18,4,10);
+    for(int i=0;i<taps;++i){
+        const float angle=float(i)*6.28318530718f/taps;
+        const float ring=(i%2==0?1.0f:0.55f)*spread;
+        const float dx=std::cos(angle)*ring;
+        const float dy=std::sin(angle)*ring;
+        SDL_FRect dst{dx,dy,float(w),float(h)};
+        renderTextureCopy(r,g_post.blur,nullptr,&dst,SDL_BLENDMODE_ADD,
+                          static_cast<Uint8>(std::clamp(alpha/(2+(i%3)),0,255)),tint.r,tint.g,tint.b);
     }
+    SDL_FRect center{0,0,float(w),float(h)};
+    renderTextureCopy(r,g_post.blur,nullptr,&center,SDL_BLENDMODE_ADD,
+                      static_cast<Uint8>(std::clamp(alpha/3,0,255)),tint.r,tint.g,tint.b);
 }
+
+void applySoftness(SDL_Renderer*r,int w,int h,int softness){
+    const int alpha=effectAlpha(softness,115);
+    if(alpha<=0||!prepareBlur(r))return;
+    SDL_FRect dst{0,0,float(w),float(h)};
+    renderTextureCopy(r,g_post.blur,nullptr,&dst,SDL_BLENDMODE_BLEND,static_cast<Uint8>(alpha));
+}
+
 void applyLcdSubpixels(SDL_Renderer*r,int w,int h,int alpha,int step){
     if(alpha<=0)return;
     step=std::max(6,step);
     const Uint8 a=static_cast<Uint8>(std::clamp(alpha,0,255));
     for(int x=0;x<w;x+=step){
-        fillAbs(r,float(x),0,1,float(h),{255,80,80,a});
-        fillAbs(r,float(x+std::max(1,step/3)),0,1,float(h),{80,255,110,a});
-        fillAbs(r,float(x+std::max(2,2*step/3)),0,1,float(h),{80,170,255,a});
+        fillAbs(r,float(x),0,1,float(h),{255,55,55,a});
+        fillAbs(r,float(x+std::max(1,step/3)),0,1,float(h),{55,255,90,a});
+        fillAbs(r,float(x+std::max(2,2*step/3)),0,1,float(h),{55,135,255,a});
     }
 }
+
+void renderAnalogFrame(SDL_Renderer*r,int w,int h){
+    const Uint64 tick=SDL_GetTicks();
+    const float jitter_px=(g_shader.horizontal_jitter/100.0f)*std::max(2.0f,w*0.018f)*g_shader.strength/100.0f;
+    const float distortion=g_shader.distortion/100.0f*g_shader.strength/100.0f;
+    const int strip_h=std::clamp(18-int(distortion*14.0f),4,18);
+    SDL_SetTextureBlendMode(g_post.frame,SDL_BLENDMODE_NONE);
+    for(int y=0;y<h;y+=strip_h){
+        const int sh=std::min(strip_h,h-y);
+        const float wave=std::sin(float(y)*0.031f+float(tick%2000u)*0.006f);
+        float dx=wave*jitter_px;
+        if(distortion>0.05f&&((y/strip_h+int(tick/73u))%29)==0)dx+=(distortion*w*0.045f)*(wave>=0?1.0f:-1.0f);
+        const float stretch=distortion*std::abs(wave)*w*0.006f;
+        SDL_FRect src{0,float(y),float(w),float(sh)};
+        SDL_FRect dst{dx,float(y),float(w)+stretch,float(sh)};
+        SDL_RenderTexture(r,g_post.frame,&src,&dst);
+    }
+    resetTextureState(g_post.frame);
 }
 
-void applyVisualShader(SDL_Renderer*r){
-    if(g_shader.mode==VisualShader::None||g_shader.strength<=0)return;
-    int w=960,h=720;
-    if(!SDL_GetRenderOutputSize(r,&w,&h)||w<=0||h<=0){w=960;h=720;}
-    float old_sx=1,old_sy=1;SDL_GetRenderScale(r,&old_sx,&old_sy);SDL_SetRenderScale(r,1,1);
+void applyAnalogNoise(SDL_Renderer*r,int w,int h){
+    const Uint64 tick=SDL_GetTicks();
+    const int noise_alpha=effectAlpha(g_shader.noise,70);
+    const int distortion_alpha=effectAlpha(g_shader.distortion,95);
+    const int count=3+std::clamp(g_shader.noise,0,100)/7;
+    for(int i=0;i<count;++i){
+        const int y=int((tick/7u+Uint64(i*53))%Uint64(std::max(1,h-2)));
+        const int len=50+int((tick/11u+Uint64(i*97))%Uint64(std::max(51,w/2)));
+        const int x=int((tick/13u+Uint64(i*131))%Uint64(std::max(1,w-len)));
+        fillAbs(r,float(x),float(y),float(len),1,{255,255,255,static_cast<Uint8>(std::clamp(noise_alpha,0,255))});
+    }
+    for(int i=0;i<2+g_shader.distortion/20;++i){
+        const int y=int((tick/37u+Uint64(i*101))%Uint64(std::max(1,h-4)));
+        const int hh=1+g_shader.distortion/35;
+        fillAbs(r,0,float(y),float(w),float(hh),{0,0,0,static_cast<Uint8>(std::clamp(distortion_alpha,0,255))});
+    }
+}
 
+void renderChromaticFrame(SDL_Renderer*r,int w,int h){
+    const int pixels=std::max(0,g_shader.rgb_offset);
+    const float scale=0.45f+0.55f*g_shader.strength/100.0f;
+    const float off=pixels*scale;
+    float dx=0.0f,dy=0.0f;
+    switch(g_shader.direction&3){
+        case 0:dx=off;break;
+        case 1:dy=off;break;
+        case 2:dx=off*0.7071f;dy=off*0.7071f;break;
+        case 3:dx=off*0.7071f;dy=-off*0.7071f;break;
+    }
+    SDL_FRect red{-dx,-dy,float(w),float(h)};
+    SDL_FRect green{0,0,float(w),float(h)};
+    SDL_FRect blue{dx,dy,float(w),float(h)};
+    renderTextureCopy(r,g_post.frame,nullptr,&red,SDL_BLENDMODE_ADD,255,255,0,0);
+    renderTextureCopy(r,g_post.frame,nullptr,&green,SDL_BLENDMODE_ADD,255,0,255,0);
+    renderTextureCopy(r,g_post.frame,nullptr,&blue,SDL_BLENDMODE_ADD,255,0,0,255);
+}
+
+void renderHistoryTrail(SDL_Renderer*r,int w,int h,int persistence,int trails,C tint={255,255,255,255}){
+    if(!g_post.history_valid||!g_post.history_a)return;
+    const int base=effectAlpha(persistence,105);
+    if(base<=0)return;
+    const int count=std::clamp(trails,1,8);
+    const float distance=0.75f+std::clamp(persistence,0,100)*0.035f;
+    for(int i=count-1;i>=0;--i){
+        const float offset=(i+1)*distance;
+        SDL_FRect dst{offset,offset*0.35f,float(w),float(h)};
+        const int alpha=std::clamp(base/(2+i),0,100);
+        renderTextureCopy(r,g_post.history_a,nullptr,&dst,SDL_BLENDMODE_ADD,static_cast<Uint8>(alpha),tint.r,tint.g,tint.b);
+    }
+}
+
+void updateHistory(SDL_Renderer*r,int persistence){
+    if(!ensureHistoryTargets(r))return;
+    SDL_SetRenderTarget(r,g_post.history_b);
+    SDL_SetRenderViewport(r,nullptr);
+    SDL_SetRenderScale(r,1.0f,1.0f);
+    clearTarget(r,{0,0,0,255});
+    if(!g_post.history_valid){
+        renderTextureCopy(r,g_post.frame,nullptr,nullptr,SDL_BLENDMODE_NONE,255);
+    }else{
+        const int p=std::clamp(persistence,0,100);
+        const Uint8 old_alpha=static_cast<Uint8>(std::clamp(35+p*2,35,225));
+        const Uint8 current_alpha=static_cast<Uint8>(std::clamp(235-p*17/10,65,235));
+        renderTextureCopy(r,g_post.history_a,nullptr,nullptr,SDL_BLENDMODE_BLEND,old_alpha);
+        renderTextureCopy(r,g_post.frame,nullptr,nullptr,SDL_BLENDMODE_ADD,current_alpha);
+    }
+    SDL_SetRenderTarget(r,nullptr);
+    SDL_SetRenderViewport(r,nullptr);
+    SDL_SetRenderScale(r,1.0f,1.0f);
+    std::swap(g_post.history_a,g_post.history_b);
+    g_post.history_valid=true;
+}
+
+void applySimpleOverlayShader(SDL_Renderer*r,int w,int h){
     switch(g_shader.mode){
-        case VisualShader::None:break;
-        case VisualShader::CRT:
-            applyBloom(r,w,h,effectAlpha(g_shader.glow,64),55,g_shader.softness);
-            applyScanlines(r,w,h,g_shader.scanline_spacing,1,effectAlpha(g_shader.scanlines,90));
-            applyVignette(r,w,h,effectAlpha(g_shader.vignette,100),55,g_shader.softness);
-            applyCurvature(r,w,h,effectAlpha(g_shader.curvature,125),g_shader.curvature);
-            if(g_shader.softness>0)fillAbs(r,0,0,float(w),float(h),{255,255,255,static_cast<Uint8>(effectAlpha(g_shader.softness,18))});
-            break;
-        case VisualShader::Terminal:
-            applyBloom(r,w,h,effectAlpha(g_shader.glow,70),45,55,{155,255,180,255});
-            applyScanlines(r,w,h,4,1,effectAlpha(g_shader.scanlines,80));
-            applyGhosting(r,w,h,effectAlpha(g_shader.persistence,40),g_shader.persistence,2+g_shader.persistence/35);
-            applyFlicker(r,w,h,effectAlpha(g_shader.flicker,90));
-            break;
-        case VisualShader::LCD:{
-            const int haze=effectAlpha(100-g_shader.sharpness,28);
-            if(haze>0)fillAbs(r,0,0,float(w),float(h),{235,245,255,static_cast<Uint8>(haze)});
-            applyPixelGrid(r,w,h,g_shader.grid_size,1,effectAlpha(g_shader.pixel_grid,70));
-            applyLcdSubpixels(r,w,h,effectAlpha(g_shader.subpixel,55),g_shader.grid_size);
-            break;
-        }
-        case VisualShader::DotMatrix:
-            applyDotMatrix(r,w,h,g_shader.dot_spacing,g_shader.dot_size,effectAlpha(g_shader.dot_brightness,100));
-            break;
-        case VisualShader::Bloom:{
-            const int threshold_factor=100-std::clamp(g_shader.threshold,0,100)/2;
-            applyBloom(r,w,h,effectAlpha(threshold_factor,110),g_shader.radius,g_shader.softness);
-            break;
-        }
-        case VisualShader::Phosphor:
-            applyBloom(r,w,h,effectAlpha(g_shader.glow,90),60,55,{145,255,180,255});
-            applyGhosting(r,w,h,effectAlpha(g_shader.persistence,70),g_shader.persistence,g_shader.trail_length);
-            applyScanlines(r,w,h,4,1,effectAlpha(g_shader.scanlines,70));
-            break;
         case VisualShader::Scanlines:
-            applyScanlines(r,w,h,g_shader.scanline_spacing,g_shader.line_thickness,effectAlpha(100,105));
+            applyScanlines(r,w,h,g_shader.scanline_spacing,g_shader.line_thickness,effectAlpha(100,110));
             break;
         case VisualShader::Vignette:
-            applyVignette(r,w,h,effectAlpha(100,130),g_shader.radius,g_shader.softness);
-            break;
-        case VisualShader::Analog:
-            applyFlicker(r,w,h,effectAlpha(g_shader.flicker,80));
-            applyAnalogNoise(r,w,h,effectAlpha(g_shader.noise,65),effectAlpha(g_shader.horizontal_jitter,45),effectAlpha(g_shader.distortion,90));
-            break;
-        case VisualShader::Chromatic:
-            applyChromatic(r,w,h,effectAlpha(100,75),g_shader.rgb_offset,g_shader.direction);
-            break;
-        case VisualShader::Ghosting:
-            applyGhosting(r,w,h,effectAlpha(g_shader.persistence,95),g_shader.persistence,g_shader.trail_length);
+            applyVignette(r,w,h,effectAlpha(100,145),g_shader.radius,g_shader.softness);
             break;
         case VisualShader::PixelGrid:
             applyPixelGrid(r,w,h,g_shader.grid_size,g_shader.line_thickness,effectAlpha(100,80));
             break;
-        case VisualShader::Arcade:
-            applyBloom(r,w,h,effectAlpha(g_shader.bloom,75),55,45);
-            applyScanlines(r,w,h,4,1,effectAlpha(g_shader.scanlines,75));
-            applyPixelGrid(r,w,h,8,1,effectAlpha(g_shader.pixel_grid,35));
-            applyVignette(r,w,h,effectAlpha(g_shader.vignette,90),55,50);
+        default:
             break;
-        default:break;
     }
-    SDL_SetRenderScale(r,old_sx,old_sy);
+}
+}
+
+void beginVisualShaderFrame(SDL_Renderer*r){
+    g_post.capturing=false;
+    g_post.blur_ready=false;
+    if(!r||g_shader.mode==VisualShader::None||g_shader.strength<=0)return;
+    if(!shaderNeedsFrameTexture(g_shader.mode)){
+        g_post.history_valid=false;
+        return;
+    }
+    int w=0,h=0;
+    if(!SDL_GetRenderOutputSize(r,&w,&h)||w<=0||h<=0)return;
+    if(!ensureFrameTarget(r,w,h))return;
+    if(!shaderNeedsHistory(g_shader.mode))g_post.history_valid=false;
+    if(!SDL_SetRenderTarget(r,g_post.frame))return;
+    SDL_SetRenderViewport(r,nullptr);
+    SDL_SetRenderScale(r,1.0f,1.0f);
+    g_post.capturing=true;
+}
+
+void applyVisualShader(SDL_Renderer*r){
+    if(!r||g_shader.mode==VisualShader::None||g_shader.strength<=0)return;
+    int w=960,h=720;
+    if(!SDL_GetRenderOutputSize(r,&w,&h)||w<=0||h<=0){w=960;h=720;}
+
+    if(!g_post.capturing){
+        SDL_SetRenderTarget(r,nullptr);
+        SDL_SetRenderViewport(r,nullptr);
+        SDL_SetRenderScale(r,1.0f,1.0f);
+        applySimpleOverlayShader(r,w,h);
+        return;
+    }
+
+    SDL_SetRenderTarget(r,nullptr);
+    SDL_SetRenderViewport(r,nullptr);
+    SDL_SetRenderScale(r,1.0f,1.0f);
+    clearTarget(r,{0,0,0,255});
+
+    switch(g_shader.mode){
+        case VisualShader::None:
+            renderTextureCopy(r,g_post.frame,nullptr,nullptr,SDL_BLENDMODE_NONE,255);
+            break;
+        case VisualShader::CRT:{
+            const int soft=effectAlpha(g_shader.softness,105);
+            renderWarpedFrame(r,w,h,soft>0?std::clamp(1.0f-soft/420.0f,0.72f,1.0f):1.0f);
+            if(soft>0)applySoftness(r,w,h,g_shader.softness);
+            renderBloom(r,w,h,g_shader.glow,45+g_shader.glow/2,g_shader.softness,38);
+            applyScanlines(r,w,h,g_shader.scanline_spacing,1,effectAlpha(g_shader.scanlines,105));
+            applyVignette(r,w,h,effectAlpha(g_shader.vignette,150),50,g_shader.softness);
+            break;
+        }
+        case VisualShader::Terminal:
+            renderTextureCopy(r,g_post.frame,nullptr,nullptr,SDL_BLENDMODE_NONE,255);
+            renderBloom(r,w,h,g_shader.glow,35+g_shader.glow/2,55,45,{155,255,180,255});
+            renderHistoryTrail(r,w,h,g_shader.persistence,2+g_shader.persistence/30,{140,255,175,255});
+            applyScanlines(r,w,h,4,1,effectAlpha(g_shader.scanlines,90));
+            applyFlicker(r,w,h,effectAlpha(g_shader.flicker,95));
+            updateHistory(r,g_shader.persistence);
+            break;
+        case VisualShader::LCD:{
+            renderTextureCopy(r,g_post.frame,nullptr,nullptr,SDL_BLENDMODE_NONE,255);
+            if(g_shader.sharpness<100){
+                const int softness=100-g_shader.sharpness;
+                applySoftness(r,w,h,softness);
+            }
+            applyPixelGrid(r,w,h,g_shader.grid_size,1,effectAlpha(g_shader.pixel_grid,75));
+            applyLcdSubpixels(r,w,h,effectAlpha(g_shader.subpixel,60),g_shader.grid_size);
+            break;
+        }
+        case VisualShader::DotMatrix:
+            renderTextureCopy(r,g_post.frame,nullptr,nullptr,SDL_BLENDMODE_NONE,255);
+            renderTextureCopy(r,g_post.frame,nullptr,nullptr,SDL_BLENDMODE_ADD,
+                              static_cast<Uint8>(effectAlpha(g_shader.dot_brightness,40)));
+            applyDotMask(r,w,h,g_shader.dot_spacing,g_shader.dot_size,effectAlpha(100,245));
+            break;
+        case VisualShader::Bloom:
+            renderTextureCopy(r,g_post.frame,nullptr,nullptr,SDL_BLENDMODE_NONE,255);
+            renderBloom(r,w,h,100,g_shader.radius,g_shader.softness,g_shader.threshold);
+            break;
+        case VisualShader::Phosphor:
+            renderTextureCopy(r,g_post.frame,nullptr,nullptr,SDL_BLENDMODE_NONE,255);
+            renderBloom(r,w,h,g_shader.glow,45+g_shader.glow/2,65,42,{145,255,180,255});
+            renderHistoryTrail(r,w,h,g_shader.persistence,g_shader.trail_length,{135,255,175,255});
+            applyScanlines(r,w,h,4,1,effectAlpha(g_shader.scanlines,80));
+            updateHistory(r,g_shader.persistence);
+            break;
+        case VisualShader::Scanlines:
+        case VisualShader::Vignette:
+        case VisualShader::PixelGrid:
+            renderTextureCopy(r,g_post.frame,nullptr,nullptr,SDL_BLENDMODE_NONE,255);
+            applySimpleOverlayShader(r,w,h);
+            break;
+        case VisualShader::Analog:
+            renderAnalogFrame(r,w,h);
+            applyAnalogNoise(r,w,h);
+            applyFlicker(r,w,h,effectAlpha(g_shader.flicker,85));
+            break;
+        case VisualShader::Chromatic:
+            renderChromaticFrame(r,w,h);
+            break;
+        case VisualShader::Ghosting:
+            renderTextureCopy(r,g_post.frame,nullptr,nullptr,SDL_BLENDMODE_NONE,255);
+            renderHistoryTrail(r,w,h,g_shader.persistence,g_shader.trail_length);
+            updateHistory(r,g_shader.persistence);
+            break;
+        case VisualShader::Arcade:
+            renderTextureCopy(r,g_post.frame,nullptr,nullptr,SDL_BLENDMODE_NONE,255);
+            renderBloom(r,w,h,g_shader.bloom,45+g_shader.bloom/2,45,45);
+            applyScanlines(r,w,h,4,1,effectAlpha(g_shader.scanlines,82));
+            applyPixelGrid(r,w,h,8,1,effectAlpha(g_shader.pixel_grid,36));
+            applyVignette(r,w,h,effectAlpha(g_shader.vignette,105),58,52);
+            break;
+        default:
+            renderTextureCopy(r,g_post.frame,nullptr,nullptr,SDL_BLENDMODE_NONE,255);
+            break;
+    }
+    g_post.capturing=false;
+}
+
+void shutdownVisualShaderPipeline(){
+    destroyPostTargets();
+    g_post.renderer=nullptr;
+    g_post.target_unavailable=false;
 }
 
 void renderGame(SDL_Renderer*r,Game&g,const RenderInfo&i){
@@ -1108,7 +1465,7 @@ void renderShaderSettings(SDL_Renderer*r,const AppConfig&cfg,int sel){
     const char* desc2="";
     switch(cfg.shader){
         case VisualShader::None: desc1="Clean default output with no post-processing.";desc2="Choose another shader to reveal its own controls.";break;
-        case VisualShader::CRT: desc1="CRT exposes scanlines, spacing, glow, curvature, vignette and softness.";desc2="Curvature bends/darkens the screen edges and is unique to CRT.";break;
+        case VisualShader::CRT: desc1="CRT exposes scanlines, spacing, glow, true image curvature, vignette and softness.";desc2="Curvature warps the rendered frame itself instead of painting fake dark corners.";break;
         case VisualShader::Terminal: desc1="Terminal exposes scanlines, glow, phosphor persistence and flicker.";desc2="Pairs naturally with Hacker or Amber palettes.";break;
         case VisualShader::LCD: desc1="LCD exposes pixel grid, grid size, subpixel strength and sharpness.";desc2="Useful for a crisp flat-panel / handheld display look.";break;
         case VisualShader::DotMatrix: desc1="Dot Matrix exposes dot size, spacing and dot brightness.";desc2="The pattern can range from fine texture to chunky matrix cells.";break;

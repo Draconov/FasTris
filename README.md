@@ -64,7 +64,7 @@ Gameplay simulation is independent from rendering. The same seed, rules, and tim
 
 Gameplay bindings can be changed from **Settings -> Controls**, which also includes a dedicated Reset Controls action.
 Visual palettes are available under **Settings -> Miscellaneous -> Palettes** and apply immediately across menus and gameplay.
-Presentation shaders are available under **Settings -> Miscellaneous -> Shaders**. Each shader exposes only its relevant controls; CRT includes adjustable screen curvature.
+Presentation shaders are available under **Settings -> Miscellaneous -> Shaders**. Each shader exposes only its relevant controls. The post-processing path renders image-dependent effects from an offscreen frame texture: CRT curvature warps the actual frame, bloom derives from the rendered image, chromatic separation offsets real RGB channels, analog distortion displaces horizontal image strips, and temporal shaders retain prior-frame history.
 Procedural block textures are available under **Settings -> Miscellaneous -> Textures**. Texture controls are dynamic, apply immediately, and include options such as cell gap, bevel depth, highlights, borders, reflection, pattern scale, dots, stripes, grid geometry, and transparency depending on the selected texture. Textures are generated from lightweight SDL primitives with no image assets or runtime decoding.
 
 Palettes, textures, and shaders are presentation-only and never affect gameplay, replay data, deterministic hashes, seeds, or verification.

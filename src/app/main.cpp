@@ -1726,6 +1726,7 @@ struct AppState {
         setVisualPalette(cfg.palette);
         setVisualTexture(cfg);
         setVisualShader(cfg);
+        beginVisualShaderFrame(ren);
 
         if (screen == Screen::Game && run.game) {
             run.advance(now);
@@ -1799,6 +1800,7 @@ struct AppState {
 
     void shutdown() {
         if (!config_path.empty()) saveConfig(config_path, cfg);
+        shutdownVisualShaderPipeline();
         for (auto* pad : pads) SDL_CloseGamepad(pad);
         pads.clear();
         if (ren) SDL_DestroyRenderer(ren);
