@@ -136,9 +136,26 @@ C paletteColor(C c){
         case VisualPalette::Sunset:
             return gradientPalette({25,20,66,255},{226,88,102,255},{255,207,126,255},y,c.a);
         case VisualPalette::Sunrise:
-            return gradientPalette({38,76,112,255},{151,193,218,255},{255,206,146,255},y,c.a);
+            return gradientPalette({55,112,154,255},{232,126,125,255},{255,214,156,255},y,c.a);
         default:
             return c;
+    }
+}
+
+C paletteSelectionAccent(VisualPalette palette){
+    switch(palette){
+        case VisualPalette::Hacker:return {80,255,125,255};
+        case VisualPalette::Amber:return {255,176,58,255};
+        case VisualPalette::MintBlue:return {105,244,225,255};
+        case VisualPalette::LofiWarm:return {232,166,126,255};
+        case VisualPalette::LofiCool:return {126,177,215,255};
+        case VisualPalette::PastelBlue:return {151,215,246,255};
+        case VisualPalette::Halloween:return {255,130,35,255};
+        case VisualPalette::Sunset:return {255,108,132,255};
+        case VisualPalette::Sunrise:return {105,194,241,255};
+        case VisualPalette::Default:
+        case VisualPalette::BlackWhite:
+        default:return {120,220,255,255};
     }
 }
 
@@ -1401,10 +1418,13 @@ void renderMiscellaneous(SDL_Renderer*r,const AppConfig&cfg,int sel,const std::s
         const C row_color=selected?C{120,220,255,255}:normal;
         if(n==kMiscPalettePiecesIndex){
             if(selected)txt(r,265,y,">",row_color,true);
+            // Draw a clean L-shaped child branch, matching the palette row above.
             const float branch_x=300.0f;
-            fill(r,branch_x,y+2.0f,3.0f,17.0f,row_color);
-            fill(r,branch_x,y+16.0f,18.0f,3.0f,row_color);
-            txt(r,326,y,items[n],row_color,true);
+            const float branch_top=y-7.0f;
+            const float elbow_y=y+13.0f;
+            fill(r,branch_x,branch_top,3.0f,elbow_y-branch_top+3.0f,row_color);
+            fill(r,branch_x,elbow_y,23.0f,3.0f,row_color);
+            txt(r,332,y,items[n],row_color,true);
         }else{
             txt(r,265,y,(selected?"> ":"  ")+items[n],row_color,true);
         }
@@ -1430,47 +1450,58 @@ void renderMiscellaneous(SDL_Renderer*r,const AppConfig&cfg,int sel,const std::s
 void renderPaletteSettings(SDL_Renderer*r,const AppConfig&cfg,int sel){
     beginCanvas(r,true);
     set(r,{11,14,20,255});SDL_RenderClear(r);
-    txt(r,330,34,"PALETTES",{235,240,248,255},true);
-    txt(r,210,76,"Scrollable palette list. Changes preview and apply immediately.",{145,155,170,255});
+    txt(r,330,26,"PALETTES",{235,240,248,255},true);
 
-    constexpr int visible_rows=6;
-    constexpr float list_x=170.0f;
-    constexpr float list_y=112.0f;
-    constexpr float list_w=600.0f;
-    constexpr float row_h=58.0f;
-    constexpr float row_gap=6.0f;
+    constexpr int visible_rows=8;
+    constexpr float list_x=145.0f;
+    constexpr float list_y=78.0f;
+    constexpr float list_w=660.0f;
+    constexpr float row_h=57.0f;
+    constexpr float row_gap=5.0f;
     constexpr float list_h=visible_rows*row_h+(visible_rows-1)*row_gap;
     const int max_first=std::max(0,kVisualPaletteCount-visible_rows);
     const int desired_first=sel-visible_rows/2;
     const int first=std::clamp(desired_first,0,max_first);
     const int last=std::min(kVisualPaletteCount,first+visible_rows);
 
-    fill(r,list_x-12.0f,list_y-12.0f,list_w+36.0f,list_h+24.0f,{13,18,25,255});
-    outline(r,list_x-12.0f,list_y-12.0f,list_w+36.0f,list_h+24.0f,{42,54,68,255});
+    fill(r,list_x-12.0f,list_y-12.0f,list_w+38.0f,list_h+24.0f,{13,18,25,255});
+    outline(r,list_x-12.0f,list_y-12.0f,list_w+38.0f,list_h+24.0f,{42,54,68,255});
 
     for(int n=first;n<last;++n){
         const auto palette=static_cast<VisualPalette>(n);
         const bool selected=n==sel;
         const int row=n-first;
         const float y=list_y+row*(row_h+row_gap);
-        if(selected)fill(r,list_x,y,list_w,row_h,{20,27,37,255});
-        outline(r,list_x,y,list_w,row_h,selected?C{120,220,255,255}:C{45,55,70,255});
-        txt(r,list_x+20.0f,y+14.0f,(selected?"> ":"  ")+std::string(paletteName(palette)),
-            selected?C{120,220,255,255}:C{210,215,225,255},true);
+        if(selected){
+            const C accent=paletteSelectionAccent(palette);
+            // Palette-specific selection accents must not be recolored by the active palette.
+            const bool previous_transform=g_palette_transform_enabled;
+            g_palette_transform_enabled=false;
+            fill(r,list_x,y,list_w,row_h,{20,27,37,255});
+            outline(r,list_x,y,list_w,row_h,accent);
+            txt(r,list_x+20.0f,y+14.0f,"> "+std::string(paletteName(palette)),accent,true);
+            g_palette_transform_enabled=previous_transform;
+        }else{
+            outline(r,list_x,y,list_w,row_h,{45,55,70,255});
+            txt(r,list_x+20.0f,y+14.0f,"  "+std::string(paletteName(palette)),{210,215,225,255},true);
+        }
     }
 
-    // Compact scrollbar mirrors the automatically scrolled list window.
-    constexpr float track_x=list_x+list_w+14.0f;
+    // Scrollbar shares the selected palette's dedicated accent.
+    constexpr float track_x=list_x+list_w+15.0f;
     fill(r,track_x,list_y,6.0f,list_h,{29,36,47,255});
-    const float thumb_h=std::max(34.0f,list_h*(float(visible_rows)/float(kVisualPaletteCount)));
+    const float thumb_h=std::max(42.0f,list_h*(float(visible_rows)/float(kVisualPaletteCount)));
     const float travel=std::max(0.0f,list_h-thumb_h);
     const float fraction=max_first>0?float(first)/float(max_first):0.0f;
-    fill(r,track_x-2.0f,list_y+travel*fraction,10.0f,thumb_h,{105,185,215,255});
-
     const auto selected_palette=static_cast<VisualPalette>(std::clamp(sel,0,kVisualPaletteCount-1));
-    txt(r,170,530,std::string("SELECTED: ")+paletteName(selected_palette),{155,205,220,255},true);
-    txt(r,170,578,"UP/DOWN scroll   LEFT/RIGHT page   Mouse wheel scrolls",{135,145,160,255});
-    txt(r,170,606,"HOME/END jump   ENTER/ESC back",{135,145,160,255});
+    const C accent=paletteSelectionAccent(selected_palette);
+    const bool previous_transform=g_palette_transform_enabled;
+    g_palette_transform_enabled=false;
+    fill(r,track_x-2.0f,list_y+travel*fraction,10.0f,thumb_h,accent);
+    g_palette_transform_enabled=previous_transform;
+
+    txt(r,145,632,"UP/DOWN scroll   LEFT/RIGHT page   Mouse wheel scrolls",{135,145,160,255});
+    txt(r,145,658,"HOME/END jump   ENTER/ESC back",{135,145,160,255});
 }
 
 void renderTextureSettings(SDL_Renderer*r,const AppConfig&cfg,int sel){
