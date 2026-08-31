@@ -222,8 +222,9 @@ constexpr std::array<ShaderControl,5> kAnalogControls={
     ShaderControl::HorizontalJitter,ShaderControl::Distortion};
 constexpr std::array<ShaderControl,3> kChromaticControls={
     ShaderControl::Strength,ShaderControl::RgbOffset,ShaderControl::Direction};
-constexpr std::array<ShaderControl,4> kGhostingControls={
-    ShaderControl::Strength,ShaderControl::Persistence,ShaderControl::TrailLength,ShaderControl::GhostGlow};
+constexpr std::array<ShaderControl,6> kGhostingControls={
+    ShaderControl::Strength,ShaderControl::Persistence,ShaderControl::TrailLength,
+    ShaderControl::GhostGlow,ShaderControl::GhostLifetime,ShaderControl::ColoredGhosts};
 constexpr std::array<ShaderControl,5> kArcadeControls={
     ShaderControl::Strength,ShaderControl::BloomAmount,ShaderControl::Scanlines,
     ShaderControl::Vignette,ShaderControl::PixelGrid};
@@ -251,6 +252,8 @@ int& controlRef(ShaderSettings& p,ShaderControl control){
         case ShaderControl::Threshold:return p.threshold;
         case ShaderControl::TrailLength:return p.trail_length;
         case ShaderControl::GhostGlow:return p.ghost_glow;
+        case ShaderControl::GhostLifetime:return p.ghost_lifetime_ms;
+        case ShaderControl::ColoredGhosts:return p.colored_ghosts;
         case ShaderControl::Noise:return p.noise;
         case ShaderControl::HorizontalJitter:return p.horizontal_jitter;
         case ShaderControl::Distortion:return p.distortion;
@@ -284,6 +287,8 @@ int controlValue(const ShaderSettings& p,ShaderControl control){
         case ShaderControl::Threshold:return p.threshold;
         case ShaderControl::TrailLength:return p.trail_length;
         case ShaderControl::GhostGlow:return p.ghost_glow;
+        case ShaderControl::GhostLifetime:return p.ghost_lifetime_ms;
+        case ShaderControl::ColoredGhosts:return p.colored_ghosts;
         case ShaderControl::Noise:return p.noise;
         case ShaderControl::HorizontalJitter:return p.horizontal_jitter;
         case ShaderControl::Distortion:return p.distortion;
@@ -316,6 +321,8 @@ void clampShaderSettings(ShaderSettings& p){
     p.threshold=std::clamp(p.threshold,0,100);
     p.trail_length=std::clamp(p.trail_length,1,8);
     p.ghost_glow=std::clamp(p.ghost_glow,0,10);
+    p.ghost_lifetime_ms=std::clamp(p.ghost_lifetime_ms,0,5000);
+    p.colored_ghosts=std::clamp(p.colored_ghosts,0,1);
     p.noise=std::clamp(p.noise,0,100);
     p.horizontal_jitter=std::clamp(p.horizontal_jitter,0,100);
     p.distortion=std::clamp(p.distortion,0,100);
@@ -356,6 +363,8 @@ std::pair<int,int> controlBounds(ShaderControl control){
         case ShaderControl::DotSpacing:return {4,20};
         case ShaderControl::TrailLength:return {1,8};
         case ShaderControl::GhostGlow:return {0,10};
+        case ShaderControl::GhostLifetime:return {0,5000};
+        case ShaderControl::ColoredGhosts:return {0,1};
         case ShaderControl::RgbOffset:return {0,12};
         case ShaderControl::Direction:return {0,3};
         case ShaderControl::LineThickness:return {1,4};
@@ -364,6 +373,7 @@ std::pair<int,int> controlBounds(ShaderControl control){
 }
 
 int controlStep(ShaderControl control){
+    if(control==ShaderControl::GhostLifetime)return 100;
     switch(control){
         case ShaderControl::ScanlineSpacing:
         case ShaderControl::GridSize:
@@ -371,6 +381,7 @@ int controlStep(ShaderControl control){
         case ShaderControl::DotSpacing:
         case ShaderControl::TrailLength:
         case ShaderControl::GhostGlow:
+        case ShaderControl::ColoredGhosts:
         case ShaderControl::RgbOffset:
         case ShaderControl::Direction:
         case ShaderControl::LineThickness:
@@ -451,6 +462,30 @@ std::string textureControlValueText(const AppConfig& cfg,TextureControl control)
     }
 }
 
+int textureControlNumericValue(const AppConfig& cfg,TextureControl control){
+    const int value=textureControlValue(cfg,control);
+    if(control==TextureControl::Angle)return value*45;
+    return value;
+}
+
+bool setTextureControlNumericValue(AppConfig& cfg,TextureControl control,int value){
+    if(control==TextureControl::Angle){
+        if(value!=0&&value!=45&&value!=90&&value!=135)return false;
+        textureControlRef(cfg,control)=value/45;
+        return true;
+    }
+    const auto [lo,hi]=textureControlBounds(control);
+    if(value<lo||value>hi)return false;
+    textureControlRef(cfg,control)=value;
+    return true;
+}
+
+std::string textureControlNumericRangeText(TextureControl control){
+    if(control==TextureControl::Angle)return "0, 45, 90, OR 135";
+    const auto [lo,hi]=textureControlBounds(control);
+    return std::to_string(lo)+"-"+std::to_string(hi);
+}
+
 void adjustTextureControl(AppConfig& cfg,TextureControl control,int direction){
     if(direction==0)return;
     auto [lo,hi]=textureControlBounds(control);
@@ -503,6 +538,8 @@ const char* shaderControlName(ShaderControl control){
         case ShaderControl::Threshold:return "THRESHOLD";
         case ShaderControl::TrailLength:return "TRAIL LENGTH";
         case ShaderControl::GhostGlow:return "GHOST GLOW";
+        case ShaderControl::GhostLifetime:return "GHOST LIFETIME";
+        case ShaderControl::ColoredGhosts:return "COLORED GHOSTS";
         case ShaderControl::Noise:return "NOISE";
         case ShaderControl::HorizontalJitter:return "HORIZONTAL JITTER";
         case ShaderControl::Distortion:return "DISTORTION";
@@ -528,6 +565,10 @@ std::string shaderControlValueText(const AppConfig& cfg,std::size_t slot,ShaderC
         case ShaderControl::TrailLength:
         case ShaderControl::GhostGlow:
             return std::to_string(value);
+        case ShaderControl::GhostLifetime:
+            return value==0?"UNLIMITED":std::to_string(value)+" MS";
+        case ShaderControl::ColoredGhosts:
+            return value ? "ON" : "OFF";
         case ShaderControl::Direction:
             switch(value){
                 case 0:return "HORIZONTAL";
@@ -541,11 +582,36 @@ std::string shaderControlValueText(const AppConfig& cfg,std::size_t slot,ShaderC
     }
 }
 
+bool shaderControlAcceptsNumericInput(ShaderControl control){
+    return control!=ShaderControl::Direction&&control!=ShaderControl::ColoredGhosts;
+}
+
+int shaderControlNumericValue(const AppConfig& cfg,std::size_t slot,ShaderControl control){
+    if(slot>=cfg.shader_slots.size())return 0;
+    return controlValue(cfg.shader_slots[slot].settings,control);
+}
+
+bool setShaderControlNumericValue(AppConfig& cfg,std::size_t slot,ShaderControl control,int value){
+    if(slot>=cfg.shader_slots.size()||!shaderControlAcceptsNumericInput(control))return false;
+    const auto [lo,hi]=controlBounds(control);
+    if(value<lo||value>hi)return false;
+    if(control==ShaderControl::GhostLifetime&&value!=0&&value<100)return false;
+    controlRef(cfg.shader_slots[slot].settings,control)=value;
+    return true;
+}
+
+std::string shaderControlNumericRangeText(ShaderControl control){
+    if(control==ShaderControl::GhostLifetime)return "0 OR 100-5000";
+    if(!shaderControlAcceptsNumericInput(control))return "N/A";
+    const auto [lo,hi]=controlBounds(control);
+    return std::to_string(lo)+"-"+std::to_string(hi);
+}
+
 void adjustShaderControl(AppConfig& cfg,std::size_t slot,ShaderControl control,int direction){
     if(direction==0||slot>=cfg.shader_slots.size()||cfg.shader_slots[slot].shader==VisualShader::None)return;
     auto [lo,hi]=controlBounds(control);
     int& value=controlRef(cfg.shader_slots[slot].settings,control);
-    if(control==ShaderControl::Direction){
+    if(control==ShaderControl::Direction||control==ShaderControl::ColoredGhosts){
         const int span=hi-lo+1;
         value=lo+(value-lo+(direction>0?1:-1)+span)%span;
         return;
@@ -602,6 +668,8 @@ bool applyShaderSlotValue(AppConfig& c,const std::string& key,int value){
     else if(field=="threshold")p.threshold=value;
     else if(field=="traillength")p.trail_length=value;
     else if(field=="ghostglow")p.ghost_glow=value;
+    else if(field=="ghostlifetime")p.ghost_lifetime_ms=value;
+    else if(field=="coloredghosts")p.colored_ghosts=value;
     else if(field=="noise")p.noise=value;
     else if(field=="jitter")p.horizontal_jitter=value;
     else if(field=="distortion")p.distortion=value;
@@ -636,6 +704,8 @@ void writeShaderSlot(std::ostream& f,int index,const ShaderSlotConfig& slot){
      <<k<<"threshold="<<p.threshold
      <<k<<"traillength="<<p.trail_length
      <<k<<"ghostglow="<<p.ghost_glow
+     <<k<<"ghostlifetime="<<p.ghost_lifetime_ms
+     <<k<<"coloredghosts="<<p.colored_ghosts
      <<k<<"noise="<<p.noise
      <<k<<"jitter="<<p.horizontal_jitter
      <<k<<"distortion="<<p.distortion

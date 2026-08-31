@@ -66,6 +66,8 @@ struct ShaderRuntime {
     int threshold{65};
     int trail_length{3};
     int ghost_glow{0};
+    int ghost_lifetime_ms{1200};
+    bool colored_ghosts{true};
     int noise{20};
     int horizontal_jitter{10};
     int distortion{15};
@@ -86,6 +88,7 @@ struct ShaderHistoryRuntime {
     SDL_Texture* a{};
     SDL_Texture* b{};
     bool valid{};
+    Uint64 started_ms{};
 };
 struct PostProcessRuntime {
     SDL_Renderer* renderer{};
@@ -538,6 +541,8 @@ void setVisualShader(const AppConfig& cfg){
         out.threshold=p.threshold;
         out.trail_length=p.trail_length;
         out.ghost_glow=p.ghost_glow;
+        out.ghost_lifetime_ms=p.ghost_lifetime_ms;
+        out.colored_ghosts=p.colored_ghosts!=0;
         out.noise=p.noise;
         out.horizontal_jitter=p.horizontal_jitter;
         out.distortion=p.distortion;
@@ -545,7 +550,10 @@ void setVisualShader(const AppConfig& cfg){
         out.direction=p.direction;
         out.line_thickness=p.line_thickness;
         out.bloom=p.bloom;
-        if(previous!=mode)g_post.history[i].valid=false;
+        if(previous!=mode){
+            g_post.history[i].valid=false;
+            g_post.history[i].started_ms=0;
+        }
     }
 }
 
@@ -571,6 +579,7 @@ void destroyHistory(ShaderHistoryRuntime& history){
     destroyTexture(history.a);
     destroyTexture(history.b);
     history.valid=false;
+    history.started_ms=0;
 }
 
 void destroyPostTargets(){
@@ -913,7 +922,18 @@ void renderChromaticFrame(SDL_Renderer*r,int w,int h){
     renderTextureCopy(r,g_post.input,nullptr,&blue,SDL_BLENDMODE_ADD,255,0,0,255);
 }
 
-void renderHistoryTrail(SDL_Renderer*r,int w,int h,int persistence,int trails,C tint={255,255,255,255},int ghost_glow=0){
+void expireHistory(std::size_t slot,int lifetime_ms){
+    if(slot>=g_post.history.size()||lifetime_ms<=0)return;
+    auto& history=g_post.history[slot];
+    if(!history.valid||history.started_ms==0)return;
+    const Uint64 now=SDL_GetTicks();
+    if(now-history.started_ms>=static_cast<Uint64>(lifetime_ms)){
+        history.valid=false;
+        history.started_ms=0;
+    }
+}
+
+void renderHistoryTrail(SDL_Renderer*r,int w,int h,int persistence,int trails,C tint={255,255,255,255},int ghost_glow=0,bool preserve_colors=false){
     if(g_active_shader_slot>=g_post.history.size())return;
     const auto& history=g_post.history[g_active_shader_slot];
     if(!history.valid||!history.a)return;
@@ -935,11 +955,13 @@ void renderHistoryTrail(SDL_Renderer*r,int w,int h,int persistence,int trails,C 
             }
         }
         SDL_FRect dst{offset,offset*0.35f,float(w),float(h)};
-        renderTextureCopy(r,history.a,nullptr,&dst,SDL_BLENDMODE_ADD,static_cast<Uint8>(trail_alpha),tint.r,tint.g,tint.b);
+        const SDL_BlendMode trail_blend=preserve_colors?SDL_BLENDMODE_BLEND:SDL_BLENDMODE_ADD;
+        const int core_alpha=preserve_colors?std::clamp(trail_alpha*2,0,170):trail_alpha;
+        renderTextureCopy(r,history.a,nullptr,&dst,trail_blend,static_cast<Uint8>(core_alpha),tint.r,tint.g,tint.b);
     }
 }
 
-void updateHistory(SDL_Renderer*r,int persistence){
+void updateHistory(SDL_Renderer*r,int persistence,bool preserve_colors=false){
     if(g_active_shader_slot>=g_post.history.size()||!g_post.input)return;
     if(!ensureHistoryTargets(r,g_active_shader_slot))return;
     auto& history=g_post.history[g_active_shader_slot];
@@ -950,12 +972,13 @@ void updateHistory(SDL_Renderer*r,int persistence){
     clearTarget(r,{0,0,0,255});
     if(!history.valid){
         renderTextureCopy(r,g_post.input,nullptr,nullptr,SDL_BLENDMODE_NONE,255);
+        history.started_ms=SDL_GetTicks();
     }else{
         const int p=std::clamp(persistence,0,100);
         const Uint8 old_alpha=static_cast<Uint8>(std::clamp(35+p*2,35,225));
         const Uint8 current_alpha=static_cast<Uint8>(std::clamp(235-p*17/10,65,235));
         renderTextureCopy(r,history.a,nullptr,nullptr,SDL_BLENDMODE_BLEND,old_alpha);
-        renderTextureCopy(r,g_post.input,nullptr,nullptr,SDL_BLENDMODE_ADD,current_alpha);
+        renderTextureCopy(r,g_post.input,nullptr,nullptr,preserve_colors?SDL_BLENDMODE_BLEND:SDL_BLENDMODE_ADD,current_alpha);
     }
     SDL_SetRenderTarget(r,previous);
     SDL_SetRenderViewport(r,nullptr);
@@ -1040,8 +1063,9 @@ void applyShaderPass(SDL_Renderer*r,SDL_Texture* input,SDL_Texture* output,std::
             break;
         case VisualShader::Ghosting:
             renderTextureCopy(r,input,nullptr,nullptr,SDL_BLENDMODE_NONE,255);
-            renderHistoryTrail(r,w,h,g_shader.persistence,g_shader.trail_length,{255,255,255,255},g_shader.ghost_glow);
-            updateHistory(r,g_shader.persistence);
+            expireHistory(g_active_shader_slot,g_shader.ghost_lifetime_ms);
+            renderHistoryTrail(r,w,h,g_shader.persistence,g_shader.trail_length,{255,255,255,255},g_shader.ghost_glow,g_shader.colored_ghosts);
+            updateHistory(r,g_shader.persistence,g_shader.colored_ghosts);
             break;
         case VisualShader::Arcade:
             renderTextureCopy(r,input,nullptr,nullptr,SDL_BLENDMODE_NONE,255);
@@ -1430,7 +1454,7 @@ void renderSandboxSetup(SDL_Renderer*r,const AppConfig&c,int sel){
     txt(r,230,500,"Sandbox runs are deterministic: the seed controls pieces and starting garbage.",{155,168,185,255});
     txt(r,230,530,"Gravity 0 disables automatic fall. Goal/time 0 means endless/off.",{155,168,185,255});
     txt(r,230,590,"UP/DOWN select   LEFT/RIGHT change",{135,145,160,255});
-    txt(r,230,612,"ENTER start   ESC back",{135,145,160,255});
+    txt(r,230,612,"ENTER type exact value / start   ESC back",{135,145,160,255});
 }
 
 void renderControls(SDL_Renderer*r,const AppConfig&c,int sel,bool rebinding,bool waitpad){
@@ -1674,7 +1698,7 @@ void renderTextureSettings(SDL_Renderer*r,const AppConfig&cfg,int sel){
         default:break;
     }
     txt(r,80,585,desc,{155,168,185,255});
-    txt(r,80,630,"UP/DOWN select   LEFT/RIGHT change   ENTER cycle/open   ESC back",{135,145,160,255});
+    txt(r,80,630,"UP/DOWN select   LEFT/RIGHT change   ENTER type value/cycle   ESC back",{135,145,160,255});
 }
 
 void renderShaderSettings(SDL_Renderer*r,const AppConfig&cfg,int sel,int shader_slot){
@@ -1723,15 +1747,26 @@ void renderShaderSettings(SDL_Renderer*r,const AppConfig&cfg,int sel,int shader_
         case VisualShader::Vignette: desc1="Vignette exposes radius and softness.";desc2="Lower radius makes the darkened edge region reach further inward.";break;
         case VisualShader::Analog: desc1="Analog exposes noise, flicker, horizontal jitter and distortion.";desc2="Its position in the slot stack decides whether later effects distort the noisy signal too.";break;
         case VisualShader::Chromatic: desc1="Chromatic exposes RGB offset and direction.";desc2="Direction cycles horizontal, vertical and two diagonal variants.";break;
-        case VisualShader::Ghosting: desc1="Ghosting has persistence, trail length and Ghost Glow from 0 to 10.";desc2="Ghost Glow brightens only the afterimages, not the live frame.";break;
+        case VisualShader::Ghosting: desc1="Ghosting has persistence, trail length, lifetime, Ghost Glow and Colored Ghosts.";desc2="Ghost Lifetime clears accumulated history on schedule; 0 is unlimited. Colored Ghosts preserves tetromino hues.";break;
         case VisualShader::Arcade: desc1="Arcade exposes its bloom, scanlines, vignette and pixel-grid mix.";desc2="Tune the components independently while Strength controls this whole pass.";break;
         default:break;
     }
 
     txt(r,205,565,desc1,{155,168,185,255});
     txt(r,205,590,desc2,{155,168,185,255});
-    txt(r,205,628,"UP/DOWN select   LEFT/RIGHT change   ENTER cycle   ESC back",{135,145,160,255});
+    txt(r,205,628,"UP/DOWN select   LEFT/RIGHT change   ENTER type value/cycle   ESC back",{135,145,160,255});
     txt(r,205,652,"Slots run from 1 to 8 in order; NONE slots are skipped.",{125,175,190,255});
+}
+
+void renderNumberInputOverlay(SDL_Renderer*r,const std::string&numeric_text,const std::string&status){
+    beginCanvas(r,true);
+    constexpr float x=190.0f,y=636.0f,w=580.0f,h=68.0f;
+    fill(r,x,y,w,h,{7,10,15,245});
+    const C accent{120,220,255,255};
+    outline(r,x,y,w,h,accent);
+    txt(r,x+20.0f,y+10.0f,"TYPE VALUE: "+numeric_text,accent,true);
+    const std::string help=status.empty()?"ENTER apply   BACKSPACE edit   ESC cancel":status+"   ENTER apply   ESC cancel";
+    txt(r,x+20.0f,y+43.0f,help,{175,185,200,255});
 }
 
 void renderHelp(SDL_Renderer*r){beginCanvas(r,true);set(r,{11,14,20,255});SDL_RenderClear(r);txt(r,360,35,"HELP",{235,240,248,255},true);std::array<const char*,17> l={"Gameplay uses SDL event nanosecond timestamps.","OS key repeat is ignored; DAS/ARR are engine-driven.","Same seed + rules + input events = same simulation.","","Default keys:","Arrows: left/right/down    Space: hard drop","Up: rotate CW             Z: rotate CCW","A: rotate 180             C: hold","P: pause                  F5: restart","F6: save replay to file   ESC: menu","","Replay viewer:","Space pause, Left/Right seek 1 second","1/2/4/8 speed, N next piece, F6 save copy","","Seed and control rebinding are available from Settings.","Command line: --seed N --mode sprint --replay file"};for(int n=0;n<(int)l.size();++n)txt(r,160,105+n*30,l[n],{190,198,210,255},n<3);txt(r,160,660,"ESC back",{130,140,155,255});}

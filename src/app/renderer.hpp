@@ -80,6 +80,7 @@ void renderMiscellaneous(SDL_Renderer* r, const AppConfig& cfg, int selected, co
 void renderPaletteSettings(SDL_Renderer* r, const AppConfig& cfg, int selected);
 void renderTextureSettings(SDL_Renderer* r, const AppConfig& cfg, int selected);
 void renderShaderSettings(SDL_Renderer* r, const AppConfig& cfg, int selected, int shader_slot);
+void renderNumberInputOverlay(SDL_Renderer* r, const std::string& numeric_text, const std::string& status);
 void renderHelp(SDL_Renderer* r);
 
 } // namespace fasttris::app

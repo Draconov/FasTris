@@ -63,6 +63,7 @@ enum AndroidTouchCode : int {
 
 namespace {
 enum class Screen { Menu, Game, Settings, SeedSettings, Controls, Miscellaneous, Shaders, Textures, Palettes, Help, Replay, ReplayMenu, SandboxSetup };
+enum class DirectNumberTarget { None, ShaderSlot, ShaderControl, TextureControl, Sandbox };
 
 std::uint64_t randomSeed() {
     std::random_device rd;
@@ -710,6 +711,13 @@ struct AppState {
     bool settings_number_replace_on_type{};
     std::string settings_number_text;
     std::string settings_status;
+    DirectNumberTarget direct_number_target{DirectNumberTarget::None};
+    bool direct_number_replace_on_type{};
+    std::string direct_number_text;
+    std::string direct_number_status;
+    ShaderControl direct_shader_control{ShaderControl::Strength};
+    TextureControl direct_texture_control{TextureControl::CellGap};
+    int direct_sandbox_index{};
     bool seed_number_editing{};
     bool seed_number_replace_on_type{};
     std::string seed_number_text;
@@ -1022,6 +1030,132 @@ struct AppState {
         SDL_StopTextInput(win);
         saveConfig(config_path, cfg);
         return true;
+    }
+
+    bool directNumberEditing() const {
+        return direct_number_target!=DirectNumberTarget::None;
+    }
+
+    void beginDirectNumberEdit(DirectNumberTarget target,int initial,const std::string& range) {
+        direct_number_target=target;
+        direct_number_text=std::to_string(initial);
+        direct_number_replace_on_type=true;
+        direct_number_status=range.empty()?std::string{}:"VALID: "+range;
+        SDL_StartTextInput(win);
+    }
+
+    void cancelDirectNumberEdit() {
+        if(!directNumberEditing())return;
+        direct_number_target=DirectNumberTarget::None;
+        direct_number_replace_on_type=false;
+        direct_number_text.clear();
+        direct_number_status.clear();
+        SDL_StopTextInput(win);
+    }
+
+    bool applyDirectNumberEdit() {
+        if(!directNumberEditing()||direct_number_text.empty()){
+            direct_number_status="ENTER A NUMBER";
+            return false;
+        }
+        int value=0;
+        try{
+            std::size_t used=0;
+            const auto parsed=std::stoull(direct_number_text,&used,10);
+            if(used!=direct_number_text.size()||parsed>static_cast<unsigned long long>(std::numeric_limits<int>::max())){
+                direct_number_status="INVALID NUMBER";
+                return false;
+            }
+            value=static_cast<int>(parsed);
+        }catch(...){
+            direct_number_status="INVALID NUMBER";
+            return false;
+        }
+
+        bool ok=false;
+        bool save=false;
+        switch(direct_number_target){
+            case DirectNumberTarget::ShaderSlot:
+                if(value>=1&&value<=static_cast<int>(kShaderSlotCount)){
+                    shader_slot=value-1;
+                    shader_sel=0;
+                    ok=true;
+                }else direct_number_status="VALID: 1-8";
+                break;
+            case DirectNumberTarget::ShaderControl:
+                ok=setShaderControlNumericValue(cfg,static_cast<std::size_t>(shader_slot),direct_shader_control,value);
+                save=ok;
+                if(!ok)direct_number_status="VALID: "+shaderControlNumericRangeText(direct_shader_control);
+                break;
+            case DirectNumberTarget::TextureControl:
+                ok=setTextureControlNumericValue(cfg,direct_texture_control,value);
+                save=ok;
+                if(!ok)direct_number_status="VALID: "+textureControlNumericRangeText(direct_texture_control);
+                break;
+            case DirectNumberTarget::Sandbox:{
+                auto& r=cfg.rules;
+                switch(direct_sandbox_index){
+                    case 0: ok=value>=0&&value<=5000; if(ok)r.custom_gravity_ms=value; else direct_number_status="VALID: 0-5000"; break;
+                    case 1: ok=value>=0&&value<=1000; if(ok)r.custom_line_goal=value; else direct_number_status="VALID: 0-1000"; break;
+                    case 2: ok=value>=0&&value<=3600; if(ok)r.custom_time_limit_s=value; else direct_number_status="VALID: 0-3600"; break;
+                    case 3: ok=value>=0&&value<=12; if(ok)r.custom_start_garbage=value; else direct_number_status="VALID: 0-12"; break;
+                    default: break;
+                }
+                save=ok;
+                break;
+            }
+            case DirectNumberTarget::None:
+            default: break;
+        }
+        if(!ok)return false;
+        if(save)saveConfig(config_path,cfg);
+        direct_number_target=DirectNumberTarget::None;
+        direct_number_replace_on_type=false;
+        direct_number_text.clear();
+        direct_number_status.clear();
+        SDL_StopTextInput(win);
+        return true;
+    }
+
+    void beginShaderNumberEdit() {
+        if(shader_sel==0){
+            beginDirectNumberEdit(DirectNumberTarget::ShaderSlot,shader_slot+1,"1-8");
+            return;
+        }
+        if(shader_sel<2)return;
+        const auto controls=shaderControls(currentShader());
+        const int control_index=shader_sel-2;
+        if(control_index<0||control_index>=static_cast<int>(controls.size()))return;
+        const auto control=controls[static_cast<std::size_t>(control_index)];
+        if(!shaderControlAcceptsNumericInput(control))return;
+        direct_shader_control=control;
+        beginDirectNumberEdit(DirectNumberTarget::ShaderControl,
+            shaderControlNumericValue(cfg,static_cast<std::size_t>(shader_slot),control),
+            shaderControlNumericRangeText(control));
+    }
+
+    void beginTextureNumberEdit() {
+        if(texture_sel<=0)return;
+        const auto controls=textureControls(cfg.texture);
+        const int control_index=texture_sel-1;
+        if(control_index<0||control_index>=static_cast<int>(controls.size()))return;
+        direct_texture_control=controls[static_cast<std::size_t>(control_index)];
+        beginDirectNumberEdit(DirectNumberTarget::TextureControl,
+            textureControlNumericValue(cfg,direct_texture_control),
+            textureControlNumericRangeText(direct_texture_control));
+    }
+
+    void beginSandboxNumberEdit() {
+        if(custom_sel<0||custom_sel>3)return;
+        direct_sandbox_index=custom_sel;
+        const auto& r=cfg.rules;
+        switch(custom_sel){
+            case 0: beginDirectNumberEdit(DirectNumberTarget::Sandbox,r.custom_gravity_ms,"0-5000"); break;
+            case 1: beginDirectNumberEdit(DirectNumberTarget::Sandbox,r.custom_line_goal,"0-1000"); break;
+            case 2: beginDirectNumberEdit(DirectNumberTarget::Sandbox,r.custom_time_limit_s,"0-3600"); break;
+            case 3: beginDirectNumberEdit(DirectNumberTarget::Sandbox,r.custom_start_garbage,"0-12"); break;
+            default: break;
+        }
     }
 
     void beginSeedNumberEdit() {
@@ -1465,6 +1599,25 @@ struct AppState {
         }
 #endif
 
+        if(directNumberEditing()){
+            if(ev.type==SDL_EVENT_TEXT_INPUT){
+                constexpr std::size_t limit=10u;
+                bool has_digit=false;
+                for(const char* c=ev.text.text;*c;++c)if(*c>='0'&&*c<='9'){has_digit=true;break;}
+                if(has_digit&&direct_number_replace_on_type){direct_number_text.clear();direct_number_replace_on_type=false;}
+                for(const char* c=ev.text.text;*c&&direct_number_text.size()<limit;++c){
+                    if(*c>='0'&&*c<='9')direct_number_text.push_back(*c);
+                }
+            }else if(ev.type==SDL_EVENT_KEY_DOWN&&!ev.key.repeat){
+                if(ev.key.key==SDLK_BACKSPACE){
+                    if(direct_number_replace_on_type){direct_number_text.clear();direct_number_replace_on_type=false;}
+                    else if(!direct_number_text.empty())direct_number_text.pop_back();
+                }else if(ev.key.key==SDLK_ESCAPE)cancelDirectNumberEdit();
+                else if(ev.key.key==SDLK_RETURN||ev.key.key==SDLK_KP_ENTER)applyDirectNumberEdit();
+            }
+            return SDL_APP_CONTINUE;
+        }
+
         if (ev.type == SDL_EVENT_GAMEPAD_ADDED) {
             if (auto* pad = SDL_OpenGamepad(ev.gdevice.which)) pads.push_back(pad);
             return SDL_APP_CONTINUE;
@@ -1582,7 +1735,8 @@ struct AppState {
                         r.custom_start_garbage = std::clamp(r.custom_start_garbage + delta, 0, 12);
                     }
                 } else if (key == SDLK_RETURN || key == SDLK_KP_ENTER) {
-                    if (custom_sel == 4) {
+                    if(custom_sel<4)beginSandboxNumberEdit();
+                    else{
                         saveConfig(config_path, cfg);
                         startRun(Mode::Custom, ev.key.timestamp);
                     }
@@ -1736,8 +1890,17 @@ struct AppState {
                     adjustShaderSetting(1);
                 }else if(key==SDLK_RETURN||key==SDLK_KP_ENTER){
                     if(shader_sel==shaderSettingsBackIndex())screen=Screen::Miscellaneous;
-                    else if(shader_sel==0)cycleShaderSlot(1);
+                    else if(shader_sel==0)beginShaderNumberEdit();
                     else if(shader_sel==1)cycleShader(1);
+                    else{
+                        const auto controls=shaderControls(currentShader());
+                        const int control_index=shader_sel-2;
+                        if(control_index>=0&&control_index<static_cast<int>(controls.size())){
+                            const auto control=controls[static_cast<std::size_t>(control_index)];
+                            if(shaderControlAcceptsNumericInput(control))beginShaderNumberEdit();
+                            else adjustShaderSetting(1);
+                        }
+                    }
                 }
             }
             return SDL_APP_CONTINUE;
@@ -1760,6 +1923,7 @@ struct AppState {
                 }else if(key==SDLK_RETURN||key==SDLK_KP_ENTER){
                     if(texture_sel==textureSettingsBackIndex())screen=Screen::Miscellaneous;
                     else if(texture_sel==0)cycleTexture(1);
+                    else beginTextureNumberEdit();
                 }
             }
             return SDL_APP_CONTINUE;
@@ -1991,6 +2155,8 @@ struct AppState {
         } else if (screen == Screen::Help) {
             renderHelp(ren);
         }
+
+        if(directNumberEditing())renderNumberInputOverlay(ren,direct_number_text,direct_number_status);
 
         applyVisualShader(ren);
         SDL_RenderPresent(ren);

@@ -110,6 +110,8 @@ enum class ShaderControl : int {
     Threshold,
     TrailLength,
     GhostGlow,
+    GhostLifetime,
+    ColoredGhosts,
     Noise,
     HorizontalJitter,
     Distortion,
@@ -143,6 +145,8 @@ struct ShaderSettings {
     int threshold{65};
     int trail_length{3};
     int ghost_glow{0};
+    int ghost_lifetime_ms{1200};
+    int colored_ghosts{1};
     int noise{20};
     int horizontal_jitter{10};
     int distortion{15};
@@ -199,11 +203,18 @@ struct AppConfig {
 std::span<const TextureControl> textureControls(VisualTexture texture);
 const char* textureControlName(TextureControl control);
 std::string textureControlValueText(const AppConfig& cfg, TextureControl control);
+int textureControlNumericValue(const AppConfig& cfg, TextureControl control);
+bool setTextureControlNumericValue(AppConfig& cfg, TextureControl control, int value);
+std::string textureControlNumericRangeText(TextureControl control);
 void adjustTextureControl(AppConfig& cfg, TextureControl control, int direction);
 
 std::span<const ShaderControl> shaderControls(VisualShader shader);
 const char* shaderControlName(ShaderControl control);
 std::string shaderControlValueText(const AppConfig& cfg, std::size_t slot, ShaderControl control);
+bool shaderControlAcceptsNumericInput(ShaderControl control);
+int shaderControlNumericValue(const AppConfig& cfg, std::size_t slot, ShaderControl control);
+bool setShaderControlNumericValue(AppConfig& cfg, std::size_t slot, ShaderControl control, int value);
+std::string shaderControlNumericRangeText(ShaderControl control);
 void adjustShaderControl(AppConfig& cfg, std::size_t slot, ShaderControl control, int direction);
 
 AppConfig defaultConfig();
