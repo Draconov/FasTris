@@ -198,11 +198,6 @@ jobs:
     needs: version
     runs-on: ubuntu-22.04
     timeout-minutes: 40
-    env:
-      ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
-      ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
-      ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
-      ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-java@v6
@@ -221,54 +216,31 @@ jobs:
       - name: Download pinned SDL3 Android archive
         shell: bash
         run: bash scripts/prepare_sdl_android.sh
-      - name: Configure Android release signing when secrets exist
+      - name: Build debug-signed test APK
+        run: gradle --no-daemon -p platform/android :app:assembleDebug --stacktrace
+      - name: Verify and package test APK
         shell: bash
         run: |
           set -euo pipefail
-          present=0
-          [[ -n "${ANDROID_KEYSTORE_BASE64:-}" ]] && present=$((present + 1))
-          [[ -n "${ANDROID_KEY_ALIAS:-}" ]] && present=$((present + 1))
-          [[ -n "${ANDROID_KEYSTORE_PASSWORD:-}" ]] && present=$((present + 1))
-          [[ -n "${ANDROID_KEY_PASSWORD:-}" ]] && present=$((present + 1))
-
-          if [[ "$present" -eq 4 ]]; then
-            printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/fastris-release.jks"
-            cat > platform/android/signing.properties <<PROPS
-          storeFile=$RUNNER_TEMP/fastris-release.jks
-          storePassword=$ANDROID_KEYSTORE_PASSWORD
-          keyAlias=$ANDROID_KEY_ALIAS
-          keyPassword=$ANDROID_KEY_PASSWORD
-          PROPS
-            echo "Android signing enabled."
-          elif [[ "$present" -eq 0 ]]; then
-            echo "Android signing secrets are not configured; publishing an unsigned APK."
-          else
-            echo "Android signing is partially configured. Set all four ANDROID_* secrets or none of them." >&2
-            exit 1
-          fi
-      - name: Build APK
-        run: gradle --no-daemon -p platform/android :app:assembleRelease --stacktrace
-      - name: Package APK
-        shell: bash
-        run: |
-          set -euo pipefail
-          version="${{ needs.version.outputs.version }}"
           mkdir -p dist
-          signed="platform/android/app/build/outputs/apk/release/app-release.apk"
-          unsigned="platform/android/app/build/outputs/apk/release/app-release-unsigned.apk"
-          if [[ -s "$signed" ]]; then
-            cp "$signed" "dist/FasTris.apk"
-          elif [[ -s "$unsigned" ]]; then
-            cp "$unsigned" "dist/FasTris.apk"
-          else
-            echo "No release APK produced" >&2
+          apk="platform/android/app/build/outputs/apk/debug/app-debug.apk"
+          if [[ ! -s "$apk" ]]; then
+            echo "Debug APK was not produced." >&2
             find platform/android/app/build/outputs -maxdepth 5 -type f -print || true
             exit 1
           fi
+
+          APKSIGNER="$ANDROID_HOME/build-tools/35.0.0/apksigner"
+          if [[ ! -x "$APKSIGNER" ]]; then
+            echo "apksigner not found at $APKSIGNER" >&2
+            exit 1
+          fi
+          "$APKSIGNER" verify --verbose --print-certs "$apk"
+          cp "$apk" "dist/FasTris.apk"
       - uses: actions/upload-artifact@v7
         with:
           name: android
-          path: dist/*.apk
+          path: dist/FasTris.apk
           if-no-files-found: error
 
   release:

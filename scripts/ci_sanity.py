@@ -103,6 +103,14 @@ if "dist/FasTris.exe" not in release_workflow or "FASTTRIS_BUILD_TOOLS=OFF" not 
     fail("Windows release must publish the single FasTris.exe app without developer tools")
 if "dist/FasTris.apk" not in release_workflow:
     fail("Android release must publish the clean FasTris.apk asset name")
+if ":app:assembleDebug" not in release_workflow or "app/build/outputs/apk/debug/app-debug.apk" not in release_workflow:
+    fail("Android test release must build the automatically debug-signed APK")
+if ":app:assembleRelease" in release_workflow or "ANDROID_KEYSTORE_BASE64" in release_workflow:
+    fail("Android test release must not require release-signing secrets")
+if "app-release-unsigned.apk" in release_workflow or "publishing an unsigned APK" in release_workflow:
+    fail("Android release must never publish an unsigned APK fallback")
+if "apksigner" not in release_workflow or "verify --verbose --print-certs" not in release_workflow:
+    fail("Android release must verify the APK signature before publishing")
 
 if re.search(r"dist/FasTris-v[^\n\"']*\.(?:zip|tar\.gz|apk)", release_workflow):
     fail("release.yml must not publish versioned duplicate platform packages")
