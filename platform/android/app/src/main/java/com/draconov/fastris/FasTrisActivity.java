@@ -79,11 +79,11 @@ public class FasTrisActivity extends SDLActivity {
             int gameHeight;
             if (portrait) {
                 gameWidth = width;
-                gameHeight = Math.max(1, Math.round(height * 0.70f));
+                gameHeight = Math.max(1, Math.round(height * 0.76f));
             } else {
-                int side = Math.round(width * 0.18f);
-                int maxSide = Math.round(width * 0.22f);
-                int minSide = Math.min(Math.round(width * 0.12f), dp(150));
+                int side = Math.round(width * 0.16f);
+                int maxSide = Math.round(width * 0.19f);
+                int minSide = Math.min(Math.round(width * 0.11f), dp(132));
                 side = Math.max(minSide, Math.min(maxSide, side));
                 gameWidth = Math.max(1, width - side * 2);
                 gameHeight = height;
@@ -193,7 +193,13 @@ public class FasTrisActivity extends SDLActivity {
             for (Zone zone : zones) {
                 canvas.drawRoundRect(zone.rect, radius, radius, fillPaint);
                 canvas.drawRoundRect(zone.rect, radius, radius, borderPaint);
-                textPaint.setTextSize(Math.max(dp(12), Math.min(zone.rect.height() * 0.28f, dp(22))));
+                float textSize = Math.max(dp(12), Math.min(zone.rect.height() * 0.30f, dp(24)));
+                textPaint.setTextSize(textSize);
+                float maxWidth = zone.rect.width() * 0.78f;
+                while (textSize > dp(11) && textPaint.measureText(zone.label) > maxWidth) {
+                    textSize -= dp(1);
+                    textPaint.setTextSize(textSize);
+                }
                 Paint.FontMetrics metrics = textPaint.getFontMetrics();
                 float baseline = zone.rect.centerY() - (metrics.ascent + metrics.descent) * 0.5f;
                 canvas.drawText(zone.label, zone.rect.centerX(), baseline, textPaint);
@@ -225,35 +231,64 @@ public class FasTrisActivity extends SDLActivity {
             if (height >= width) {
                 float top = gameRect.bottom;
                 float controlHeight = Math.max(1.0f, height - top);
+                float margin = 0.025f * width;
+                float gap = 0.018f * width;
 
-                addZone(0.05f * width, top + 0.45f * controlHeight, 0.24f * width, top + 0.72f * controlHeight, "LEFT", LEFT);
-                addZone(0.27f * width, top + 0.63f * controlHeight, 0.46f * width, top + 0.91f * controlHeight, "DOWN", DOWN);
-                addZone(0.49f * width, top + 0.45f * controlHeight, 0.68f * width, top + 0.72f * controlHeight, "RIGHT", RIGHT);
+                float row1Top = top + 0.06f * controlHeight;
+                float row1Bottom = top + 0.24f * controlHeight;
+                float utilityW = (width - margin * 2.0f - gap * 2.0f) / 3.0f;
+                addZone(margin, row1Top, margin + utilityW, row1Bottom, "HOLD", HOLD);
+                addZone(margin + utilityW + gap, row1Top, margin + utilityW * 2.0f + gap, row1Bottom, "II", PAUSE);
+                addZone(margin + utilityW * 2.0f + gap * 2.0f, row1Top, width - margin, row1Bottom, "MENU", BACK);
 
-                addZone(0.71f * width, top + 0.35f * controlHeight, 0.84f * width, top + 0.58f * controlHeight, "CCW", ROTATE_CCW);
-                addZone(0.85f * width, top + 0.35f * controlHeight, 0.98f * width, top + 0.58f * controlHeight, "CW", ROTATE_CW);
-                addZone(0.71f * width, top + 0.61f * controlHeight, 0.84f * width, top + 0.84f * controlHeight, "180", ROTATE_180);
-                addZone(0.85f * width, top + 0.61f * controlHeight, 0.98f * width, top + 0.91f * controlHeight, "DROP", HARD_DROP);
+                float moveTop = top + 0.33f * controlHeight;
+                float moveBottom = top + 0.94f * controlHeight;
+                float leftAreaRight = width * 0.56f;
+                float rightAreaLeft = width * 0.60f;
 
-                addZone(0.04f * width, top + 0.08f * controlHeight, 0.22f * width, top + 0.32f * controlHeight, "HOLD", HOLD);
-                addZone(0.39f * width, top + 0.08f * controlHeight, 0.57f * width, top + 0.32f * controlHeight, "PAUSE", PAUSE);
-                addZone(0.61f * width, top + 0.08f * controlHeight, 0.79f * width, top + 0.32f * controlHeight, "MENU", BACK);
+                float mW = leftAreaRight - margin;
+                float leftW = mW * 0.34f;
+                float centerW = mW * 0.28f;
+                addZone(margin, moveTop + 0.18f * (moveBottom - moveTop), margin + leftW, moveTop + 0.62f * (moveBottom - moveTop), "<", LEFT);
+                addZone(margin + leftW + gap, moveTop + 0.38f * (moveBottom - moveTop), margin + leftW + gap + centerW, moveBottom, "V", DOWN);
+                addZone(leftAreaRight - leftW, moveTop + 0.18f * (moveBottom - moveTop), leftAreaRight, moveTop + 0.62f * (moveBottom - moveTop), ">", RIGHT);
+
+                float rW = width - margin - rightAreaLeft;
+                float colW = (rW - gap) / 2.0f;
+                float rTop1 = moveTop;
+                float rBot1 = moveTop + 0.34f * (moveBottom - moveTop);
+                float rTop2 = moveTop + 0.42f * (moveBottom - moveTop);
+                float rBot2 = moveBottom;
+                addZone(rightAreaLeft, rTop1, rightAreaLeft + colW, rBot1, "CCW", ROTATE_CCW);
+                addZone(rightAreaLeft + colW + gap, rTop1, width - margin, rBot1, "CW", ROTATE_CW);
+                addZone(rightAreaLeft, rTop2, rightAreaLeft + colW, rBot2, "180", ROTATE_180);
+                addZone(rightAreaLeft + colW + gap, rTop2, width - margin, rBot2, "HD", HARD_DROP);
             } else {
                 float leftWidth = gameRect.left;
                 float rightStart = gameRect.right;
                 float rightWidth = width - rightStart;
+                float marginL = leftWidth * 0.08f;
+                float marginR = rightWidth * 0.08f;
+                float gapL = leftWidth * 0.06f;
+                float gapR = rightWidth * 0.06f;
 
-                addZone(0.07f * leftWidth, 0.46f * height, 0.47f * leftWidth, 0.69f * height, "LEFT", LEFT);
-                addZone(0.53f * leftWidth, 0.46f * height, 0.93f * leftWidth, 0.69f * height, "RIGHT", RIGHT);
-                addZone(0.30f * leftWidth, 0.72f * height, 0.70f * leftWidth, 0.95f * height, "DOWN", DOWN);
-                addZone(0.18f * leftWidth, 0.12f * height, 0.82f * leftWidth, 0.34f * height, "HOLD", HOLD);
+                addZone(marginL, 0.10f * height, leftWidth - marginL, 0.26f * height, "HOLD", HOLD);
+                float leftHalfW = (leftWidth - marginL * 2.0f - gapL) / 2.0f;
+                addZone(marginL, 0.46f * height, marginL + leftHalfW, 0.66f * height, "<", LEFT);
+                addZone(marginL + leftHalfW + gapL, 0.46f * height, leftWidth - marginL, 0.66f * height, ">", RIGHT);
+                addZone(marginL + leftWidth * 0.18f, 0.74f * height, leftWidth - marginL - leftWidth * 0.18f, 0.94f * height, "V", DOWN);
 
-                addZone(rightStart + 0.06f * rightWidth, 0.46f * height, rightStart + 0.47f * rightWidth, 0.68f * height, "CCW", ROTATE_CCW);
-                addZone(rightStart + 0.53f * rightWidth, 0.46f * height, rightStart + 0.94f * rightWidth, 0.68f * height, "CW", ROTATE_CW);
-                addZone(rightStart + 0.06f * rightWidth, 0.72f * height, rightStart + 0.47f * rightWidth, 0.94f * height, "180", ROTATE_180);
-                addZone(rightStart + 0.53f * rightWidth, 0.72f * height, rightStart + 0.94f * rightWidth, 0.94f * height, "DROP", HARD_DROP);
-                addZone(rightStart + 0.06f * rightWidth, 0.10f * height, rightStart + 0.47f * rightWidth, 0.31f * height, "PAUSE", PAUSE);
-                addZone(rightStart + 0.53f * rightWidth, 0.10f * height, rightStart + 0.94f * rightWidth, 0.31f * height, "MENU", BACK);
+                float topRowTop = 0.08f * height;
+                float topRowBottom = 0.24f * height;
+                float topW = (rightWidth - marginR * 2.0f - gapR) / 2.0f;
+                addZone(rightStart + marginR, topRowTop, rightStart + marginR + topW, topRowBottom, "II", PAUSE);
+                addZone(rightStart + marginR + topW + gapR, topRowTop, width - marginR, topRowBottom, "MENU", BACK);
+
+                float cellW = (rightWidth - marginR * 2.0f - gapR) / 2.0f;
+                addZone(rightStart + marginR, 0.42f * height, rightStart + marginR + cellW, 0.60f * height, "CCW", ROTATE_CCW);
+                addZone(rightStart + marginR + cellW + gapR, 0.42f * height, width - marginR, 0.60f * height, "CW", ROTATE_CW);
+                addZone(rightStart + marginR, 0.68f * height, rightStart + marginR + cellW, 0.86f * height, "180", ROTATE_180);
+                addZone(rightStart + marginR + cellW + gapR, 0.68f * height, width - marginR, 0.86f * height, "HD", HARD_DROP);
             }
         }
 
@@ -261,22 +296,29 @@ public class FasTrisActivity extends SDLActivity {
             if (height >= width) {
                 float top = gameRect.bottom;
                 float controlHeight = Math.max(1.0f, height - top);
-                addZone(0.16f * width, top + 0.08f * controlHeight, 0.36f * width, top + 0.36f * controlHeight, "UP", UP);
-                addZone(0.04f * width, top + 0.38f * controlHeight, 0.24f * width, top + 0.68f * controlHeight, "LEFT", LEFT);
-                addZone(0.28f * width, top + 0.38f * controlHeight, 0.48f * width, top + 0.68f * controlHeight, "RIGHT", RIGHT);
-                addZone(0.16f * width, top + 0.70f * controlHeight, 0.36f * width, top + 0.97f * controlHeight, "DOWN", DOWN);
-                addZone(0.59f * width, top + 0.24f * controlHeight, 0.79f * width, top + 0.61f * controlHeight, "OK", CONFIRM);
-                addZone(0.80f * width, top + 0.62f * controlHeight, 0.98f * width, top + 0.94f * controlHeight, "BACK", BACK);
+                float left = width * 0.04f;
+                float gap = width * 0.03f;
+                float right = width * 0.96f;
+                float dpadRight = width * 0.46f;
+                addZone(left + width * 0.13f, top + 0.06f * controlHeight, left + width * 0.33f, top + 0.25f * controlHeight, "^", UP);
+                addZone(left, top + 0.31f * controlHeight, left + width * 0.20f, top + 0.53f * controlHeight, "<", LEFT);
+                addZone(left + width * 0.26f, top + 0.31f * controlHeight, dpadRight, top + 0.53f * controlHeight, ">", RIGHT);
+                addZone(left + width * 0.13f, top + 0.60f * controlHeight, left + width * 0.33f, top + 0.82f * controlHeight, "V", DOWN);
+                addZone(width * 0.58f, top + 0.16f * controlHeight, width * 0.83f, top + 0.46f * controlHeight, "OK", CONFIRM);
+                addZone(width * 0.67f, top + 0.56f * controlHeight, right, top + 0.83f * controlHeight, "BACK", BACK);
             } else {
                 float leftWidth = gameRect.left;
                 float rightStart = gameRect.right;
                 float rightWidth = width - rightStart;
-                addZone(0.28f * leftWidth, 0.08f * height, 0.72f * leftWidth, 0.31f * height, "UP", UP);
-                addZone(0.04f * leftWidth, 0.36f * height, 0.47f * leftWidth, 0.61f * height, "LEFT", LEFT);
-                addZone(0.53f * leftWidth, 0.36f * height, 0.96f * leftWidth, 0.61f * height, "RIGHT", RIGHT);
-                addZone(0.28f * leftWidth, 0.67f * height, 0.72f * leftWidth, 0.92f * height, "DOWN", DOWN);
-                addZone(rightStart + 0.12f * rightWidth, 0.24f * height, rightStart + 0.88f * rightWidth, 0.55f * height, "OK", CONFIRM);
-                addZone(rightStart + 0.12f * rightWidth, 0.63f * height, rightStart + 0.88f * rightWidth, 0.91f * height, "BACK", BACK);
+                float marginL = leftWidth * 0.08f;
+                float gapL = leftWidth * 0.06f;
+                addZone(marginL + leftWidth * 0.18f, 0.10f * height, leftWidth - marginL - leftWidth * 0.18f, 0.27f * height, "^", UP);
+                float halfW = (leftWidth - marginL * 2.0f - gapL) / 2.0f;
+                addZone(marginL, 0.38f * height, marginL + halfW, 0.56f * height, "<", LEFT);
+                addZone(marginL + halfW + gapL, 0.38f * height, leftWidth - marginL, 0.56f * height, ">", RIGHT);
+                addZone(marginL + leftWidth * 0.18f, 0.68f * height, leftWidth - marginL - leftWidth * 0.18f, 0.86f * height, "V", DOWN);
+                addZone(rightStart + rightWidth * 0.12f, 0.24f * height, rightStart + rightWidth * 0.88f, 0.50f * height, "OK", CONFIRM);
+                addZone(rightStart + rightWidth * 0.12f, 0.62f * height, rightStart + rightWidth * 0.88f, 0.84f * height, "BACK", BACK);
             }
         }
 
