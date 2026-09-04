@@ -54,6 +54,7 @@ struct ShaderRuntime {
     int glow{30};
     int curvature{35};
     int vignette{25};
+    int edge_softness{15};
     int softness{15};
     int persistence{25};
     int flicker{10};
@@ -610,6 +611,7 @@ void setVisualShader(const AppConfig& cfg){
         out.glow=p.glow;
         out.curvature=p.curvature;
         out.vignette=p.vignette;
+        out.edge_softness=p.edge_softness;
         out.softness=p.softness;
         out.persistence=p.persistence;
         out.flicker=p.flicker;
@@ -1160,7 +1162,8 @@ void applySimpleOverlayShader(SDL_Renderer*r,int w,int h){
             applyScanlines(r,w,h,g_shader.scanline_spacing,g_shader.line_thickness,effectAlpha(100,110));
             break;
         case VisualShader::Vignette:
-            applyVignette(r,w,h,effectAlpha(100,145),g_shader.radius,g_shader.softness);
+            applyVignette(r,w,h,shader_math::vignetteStrengthAlpha(100,g_shader.strength),
+                          g_shader.radius,g_shader.edge_softness);
             break;
         default:
             break;
@@ -1189,7 +1192,8 @@ void applyShaderPass(SDL_Renderer*r,SDL_Texture* input,SDL_Texture* output,std::
             if(soft>0)applySoftness(r,w,h,g_shader.softness);
             renderBloom(r,w,h,g_shader.glow,45+g_shader.glow/2,g_shader.softness,38);
             applyScanlines(r,w,h,g_shader.scanline_spacing,1,effectAlpha(g_shader.scanlines,105));
-            applyVignette(r,w,h,effectAlpha(g_shader.vignette,150),50,g_shader.softness);
+            applyVignette(r,w,h,shader_math::vignetteStrengthAlpha(g_shader.vignette,g_shader.strength),
+                          50,g_shader.edge_softness);
             break;
         }
         case VisualShader::Terminal:
@@ -1250,7 +1254,8 @@ void applyShaderPass(SDL_Renderer*r,SDL_Texture* input,SDL_Texture* output,std::
             renderBloom(r,w,h,g_shader.bloom,45+g_shader.bloom/2,45,45);
             applyScanlines(r,w,h,4,1,effectAlpha(g_shader.scanlines,82));
             applyPixelGrid(r,w,h,8,1,effectAlpha(g_shader.pixel_grid,36));
-            applyVignette(r,w,h,effectAlpha(g_shader.vignette,105),58,52);
+            applyVignette(r,w,h,shader_math::vignetteStrengthAlpha(g_shader.vignette,g_shader.strength),
+                          58,g_shader.edge_softness);
             break;
         default:
             renderTextureCopy(r,input,nullptr,nullptr,SDL_BLENDMODE_NONE,255);
@@ -1925,17 +1930,17 @@ void renderShaderSettings(SDL_Renderer*r,const AppConfig&cfg,int sel,int shader_
     const char* desc2="";
     switch(shader){
         case VisualShader::None: desc1="This slot is disabled and costs no shader pass.";desc2="Choose a shader here, then use another slot to stack additional effects.";break;
-        case VisualShader::CRT: desc1="CRT exposes scanlines, spacing, glow, true image curvature, vignette and softness.";desc2="Its values are independent from every other shader profile and slot.";break;
+        case VisualShader::CRT: desc1="CRT exposes scanlines, glow, curvature, vignette darkness, edge softness and optical softness.";desc2="EDGE SOFTNESS controls only the vignette fade; SOFTNESS controls the CRT image itself.";break;
         case VisualShader::Terminal: desc1="Terminal combines terminal phosphor glow, trails, scanlines and flicker.";desc2="Stack it before or after other slots to change how the composite behaves.";break;
         case VisualShader::LCD: desc1="LCD combines pixel grid, RGB subpixels and softness.";desc2="Set Subpixel or Softness to 0 to disable either component completely.";break;
         case VisualShader::DotMatrix: desc1="Dot Matrix exposes dot size, spacing and dot brightness.";desc2="The pattern can range from fine texture to chunky matrix cells.";break;
         case VisualShader::Bloom: desc1="Bloom exposes radius, threshold and softness.";desc2="Higher softness spreads the glow; threshold controls how restrained it feels.";break;
         case VisualShader::Scanlines: desc1="Scanlines exposes spacing and line thickness.";desc2="Useful as a lightweight extra pass on top of another display shader.";break;
-        case VisualShader::Vignette: desc1="Vignette exposes radius and softness.";desc2="Lower radius makes the darkened edge region reach further inward.";break;
+        case VisualShader::Vignette: desc1="Vignette exposes radius and edge softness.";desc2="Strength sets edge darkness; Edge Softness sets how gradually it fades inward.";break;
         case VisualShader::Analog: desc1="Analog exposes noise, flicker, horizontal jitter and distortion.";desc2="Its position in the slot stack decides whether later effects distort the noisy signal too.";break;
         case VisualShader::Chromatic: desc1="Chromatic exposes RGB offset and direction.";desc2="Direction cycles horizontal, vertical and two diagonal variants.";break;
         case VisualShader::Ghosting: desc1="Ghosting tracks previous falling-piece positions with persistence, lifetime and glow.";desc2="Ghost Lifetime expires individual figurines; 0 is unlimited. Colored Ghosts preserves tetromino hues.";break;
-        case VisualShader::Arcade: desc1="Arcade exposes its bloom, scanlines, vignette and pixel-grid mix.";desc2="Tune the components independently while Strength controls this whole pass.";break;
+        case VisualShader::Arcade: desc1="Arcade exposes bloom, scanlines, vignette, edge softness and pixel grid.";desc2="Tune the components independently while Strength controls this whole pass.";break;
         default:break;
     }
 

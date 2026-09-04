@@ -96,6 +96,7 @@ enum class ShaderControl : int {
     Glow,
     Curvature,
     Vignette,
+    EdgeSoftness,
     Softness,
     Persistence,
     Flicker,
@@ -131,6 +132,7 @@ struct ShaderSettings {
     int glow{30};
     int curvature{35};
     int vignette{25};
+    int edge_softness{15};
     int softness{15};
     int persistence{25};
     int flicker{10};

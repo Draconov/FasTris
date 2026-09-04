@@ -19,6 +19,24 @@ inline VignetteProfile vignetteProfile(int width, int height, int radius, int so
     return {max_inset, max_inset / static_cast<float>(layers), layers};
 }
 
+inline int vignetteStrengthAlpha(int vignette_percent, int shader_strength) {
+    const float local = std::clamp(vignette_percent, 0, 100) / 100.0f;
+    const float strength = std::clamp(shader_strength, 0, 100) / 100.0f;
+    if (local <= 0.0f || strength <= 0.0f) return 0;
+
+    // Preserve the familiar low/mid response (0-50% maps exactly to the old
+    // 150-alpha scale), then ramp the upper half more aggressively so 100%
+    // reaches a near-black 245 alpha instead of topping out around 150.
+    float alpha = 0.0f;
+    if (local <= 0.5f) {
+        alpha = local * 150.0f;
+    } else {
+        const float upper = (local - 0.5f) * 2.0f;
+        alpha = 75.0f + 170.0f * std::pow(upper, 1.35f);
+    }
+    return std::clamp(static_cast<int>(std::lround(alpha * strength)), 0, 245);
+}
+
 inline int vignetteAlphaAt(int base_alpha, float normalized_inset, int softness) {
     if (base_alpha <= 0) return 0;
     const float t = std::clamp(normalized_inset, 0.0f, 1.0f);

@@ -200,9 +200,10 @@ void clampTextureControls(AppConfig& c){
     c.texture_grid_size=std::clamp(c.texture_grid_size,3,12);
 }
 
-constexpr std::array<ShaderControl,7> kCrtControls={
+constexpr std::array<ShaderControl,8> kCrtControls={
     ShaderControl::Strength,ShaderControl::Scanlines,ShaderControl::ScanlineSpacing,
-    ShaderControl::Glow,ShaderControl::Curvature,ShaderControl::Vignette,ShaderControl::Softness};
+    ShaderControl::Glow,ShaderControl::Curvature,ShaderControl::Vignette,
+    ShaderControl::EdgeSoftness,ShaderControl::Softness};
 constexpr std::array<ShaderControl,6> kTerminalControls={
     ShaderControl::Strength,ShaderControl::Glow,ShaderControl::Persistence,
     ShaderControl::TrailLength,ShaderControl::Scanlines,ShaderControl::Flicker};
@@ -216,7 +217,7 @@ constexpr std::array<ShaderControl,4> kBloomControls={
 constexpr std::array<ShaderControl,3> kScanlineControls={
     ShaderControl::Strength,ShaderControl::ScanlineSpacing,ShaderControl::LineThickness};
 constexpr std::array<ShaderControl,3> kVignetteControls={
-    ShaderControl::Strength,ShaderControl::Radius,ShaderControl::Softness};
+    ShaderControl::Strength,ShaderControl::Radius,ShaderControl::EdgeSoftness};
 constexpr std::array<ShaderControl,5> kAnalogControls={
     ShaderControl::Strength,ShaderControl::Noise,ShaderControl::Flicker,
     ShaderControl::HorizontalJitter,ShaderControl::Distortion};
@@ -225,9 +226,9 @@ constexpr std::array<ShaderControl,3> kChromaticControls={
 constexpr std::array<ShaderControl,6> kGhostingControls={
     ShaderControl::Strength,ShaderControl::Persistence,ShaderControl::TrailLength,
     ShaderControl::GhostGlow,ShaderControl::GhostLifetime,ShaderControl::ColoredGhosts};
-constexpr std::array<ShaderControl,5> kArcadeControls={
+constexpr std::array<ShaderControl,6> kArcadeControls={
     ShaderControl::Strength,ShaderControl::BloomAmount,ShaderControl::Scanlines,
-    ShaderControl::Vignette,ShaderControl::PixelGrid};
+    ShaderControl::Vignette,ShaderControl::EdgeSoftness,ShaderControl::PixelGrid};
 constexpr std::array<ShaderControl,0> kNoControls={};
 
 int& controlRef(ShaderSettings& p,ShaderControl control){
@@ -238,6 +239,7 @@ int& controlRef(ShaderSettings& p,ShaderControl control){
         case ShaderControl::Glow:return p.glow;
         case ShaderControl::Curvature:return p.curvature;
         case ShaderControl::Vignette:return p.vignette;
+        case ShaderControl::EdgeSoftness:return p.edge_softness;
         case ShaderControl::Softness:return p.softness;
         case ShaderControl::Persistence:return p.persistence;
         case ShaderControl::Flicker:return p.flicker;
@@ -273,6 +275,7 @@ int controlValue(const ShaderSettings& p,ShaderControl control){
         case ShaderControl::Glow:return p.glow;
         case ShaderControl::Curvature:return p.curvature;
         case ShaderControl::Vignette:return p.vignette;
+        case ShaderControl::EdgeSoftness:return p.edge_softness;
         case ShaderControl::Softness:return p.softness;
         case ShaderControl::Persistence:return p.persistence;
         case ShaderControl::Flicker:return p.flicker;
@@ -307,6 +310,7 @@ void clampShaderSettings(ShaderSettings& p){
     p.glow=std::clamp(p.glow,0,100);
     p.curvature=std::clamp(p.curvature,0,100);
     p.vignette=std::clamp(p.vignette,0,100);
+    p.edge_softness=std::clamp(p.edge_softness,0,100);
     p.softness=std::clamp(p.softness,0,100);
     p.persistence=std::clamp(p.persistence,0,100);
     p.flicker=std::clamp(p.flicker,0,100);
@@ -524,6 +528,7 @@ const char* shaderControlName(ShaderControl control){
         case ShaderControl::Glow:return "GLOW";
         case ShaderControl::Curvature:return "CURVATURE";
         case ShaderControl::Vignette:return "VIGNETTE";
+        case ShaderControl::EdgeSoftness:return "EDGE SOFTNESS";
         case ShaderControl::Softness:return "SOFTNESS";
         case ShaderControl::Persistence:return "PERSISTENCE";
         case ShaderControl::Flicker:return "FLICKER";
@@ -654,6 +659,7 @@ bool applyShaderSlotValue(AppConfig& c,const std::string& key,int value){
     else if(field=="glow")p.glow=value;
     else if(field=="curvature")p.curvature=value;
     else if(field=="vignette")p.vignette=value;
+    else if(field=="edgesoftness")p.edge_softness=value;
     else if(field=="softness")p.softness=value;
     else if(field=="persistence")p.persistence=value;
     else if(field=="flicker")p.flicker=value;
@@ -690,6 +696,7 @@ void writeShaderSlot(std::ostream& f,int index,const ShaderSlotConfig& slot){
      <<k<<"glow="<<p.glow
      <<k<<"curvature="<<p.curvature
      <<k<<"vignette="<<p.vignette
+     <<k<<"edgesoftness="<<p.edge_softness
      <<k<<"softness="<<p.softness
      <<k<<"persistence="<<p.persistence
      <<k<<"flicker="<<p.flicker
@@ -718,6 +725,7 @@ void writeShaderSlot(std::ostream& f,int index,const ShaderSlotConfig& slot){
 
 bool loadConfig(const std::string&path,AppConfig&c){
     std::ifstream f(path);if(!f)return false;
+    std::array<bool,kShaderSlotCount> edge_softness_seen{};
     std::string line;
     while(std::getline(f,line)){
         auto p=line.find('=');if(p==std::string::npos)continue;auto k=line.substr(0,p),v=line.substr(p+1);
@@ -762,12 +770,26 @@ bool loadConfig(const std::string&path,AppConfig&c){
             else if(k=="texturespacing")c.texture_spacing=n;
             else if(k=="texturelinethickness")c.texture_line_thickness=n;
             else if(k=="texturegridsize")c.texture_grid_size=n;
-            else if(k.rfind("shaderslot",0)==0)applyShaderSlotValue(c,k,n);
+            else if(k.rfind("shaderslot",0)==0){
+                int slot_index=0;std::string field;
+                if(parseIndexSuffix(k,"shaderslot",slot_index,&field)&&slot_index>=0&&
+                   slot_index<static_cast<int>(kShaderSlotCount)&&field=="edgesoftness")
+                    edge_softness_seen[static_cast<std::size_t>(slot_index)]=true;
+                applyShaderSlotValue(c,k,n);
+            }
             else if(k=="tournament")c.rules.tournament=n!=0;
             else if(k=="guideline")c.rules.guideline=n!=0;
             else if(k.rfind("key",0)==0){int i=std::stoi(k.substr(3));if(i>=0&&i<(int)c.keys.size())c.keys[i]=static_cast<SDL_Keycode>(n);}
             else if(k.rfind("pad",0)==0){int i=std::stoi(k.substr(3));if(i>=0&&i<(int)c.pads.size())c.pads[i]=n;}
         }catch(...){}
+    }
+    // Before EDGE SOFTNESS existed, CRT/Vignette used SOFTNESS for the
+    // vignette falloff and Arcade used a fixed value of 52. Preserve that
+    // appearance once when loading an older config, then save the new field.
+    for(std::size_t i=0;i<c.shader_slots.size();++i){
+        if(edge_softness_seen[i])continue;
+        auto& slot=c.shader_slots[i];
+        slot.settings.edge_softness=slot.shader==VisualShader::Arcade?52:slot.settings.softness;
     }
     clampConfig(c);return true;
 }

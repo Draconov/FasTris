@@ -8,6 +8,25 @@ int main() {
     using fasttris::app::shader_math::vignetteAlphaAt;
     using fasttris::app::shader_math::vignetteAlphaAtPoint;
     using fasttris::app::shader_math::vignetteProfile;
+    using fasttris::app::shader_math::vignetteStrengthAlpha;
+
+
+    // Vignette darkness keeps the lower half close to the old response, but
+    // the upper half ramps strongly so 100% reaches near-black.
+    assert(vignetteStrengthAlpha(0, 100) == 0);
+    assert(vignetteStrengthAlpha(25, 100) >= 35 && vignetteStrengthAlpha(25, 100) <= 40);
+    assert(vignetteStrengthAlpha(50, 100) >= 73 && vignetteStrengthAlpha(50, 100) <= 77);
+    assert(vignetteStrengthAlpha(75, 100) > 125);
+    assert(vignetteStrengthAlpha(100, 100) >= 240);
+    assert(vignetteStrengthAlpha(100, 50) >= 118 && vignetteStrengthAlpha(100, 50) <= 125);
+
+    // Edge softness changes only the inward falloff. It must not weaken the
+    // fully dark outer corner or touch the clear center.
+    const int tight_mid = vignetteAlphaAtPoint(1600, 900, 180.0f, 120.0f, 245, 50, 0);
+    const int broad_mid = vignetteAlphaAtPoint(1600, 900, 180.0f, 120.0f, 245, 50, 100);
+    assert(broad_mid > tight_mid);
+    assert(vignetteAlphaAtPoint(1600, 900, 0.0f, 0.0f, 245, 50, 0) == 245);
+    assert(vignetteAlphaAtPoint(1600, 900, 0.0f, 0.0f, 245, 50, 100) == 245);
 
     const VignetteProfile profile = vignetteProfile(1760, 880, 50, 0);
     assert(profile.layers >= 20);
