@@ -1,4 +1,5 @@
 #include "renderer.hpp"
+#include "shader_math.hpp"
 #include "fasttris/rules.hpp"
 #include "fasttris/version.hpp"
 #include "fasttris/tetromino.hpp"
@@ -821,21 +822,28 @@ void applyDotMask(SDL_Renderer*r,int w,int h,int spacing,int dot_size,int alpha)
 
 void applyVignette(SDL_Renderer*r,int w,int h,int alpha,int radius,int softness){
     if(alpha<=0)return;
-    const float reach=(1.0f-std::clamp(radius,0,100)/100.0f)*0.30f+0.035f;
-    const float max_inset=std::min(w,h)*reach;
-    const int layers=std::clamp(12+softness/3,12,44);
-    const float thickness=std::max(1.0f,std::min(w,h)/720.0f);
-    for(int i=0;i<layers;++i){
-        const float outer=float(i)/layers;
-        const float inset=max_inset*outer;
-        const float falloff=1.0f-outer;
-        const float shaped=falloff*falloff*(0.35f+0.65f*(softness/100.0f));
-        const Uint8 a=static_cast<Uint8>(std::clamp(int(alpha*shaped),0,255));
+    const auto profile=shader_math::vignetteProfile(w,h,radius,softness);
+    for(int i=0;i<profile.layers;++i){
+        const float normalized=profile.layers>1?float(i)/float(profile.layers-1):0.0f;
+        const Uint8 a=static_cast<Uint8>(shader_math::vignetteAlphaAt(alpha,normalized,softness));
         if(a==0)continue;
-        fillAbs(r,inset,inset,float(w)-2*inset,thickness,{0,0,0,a});
-        fillAbs(r,inset,float(h)-inset-thickness,float(w)-2*inset,thickness,{0,0,0,a});
-        fillAbs(r,inset,inset,thickness,float(h)-2*inset,{0,0,0,a});
-        fillAbs(r,float(w)-inset-thickness,inset,thickness,float(h)-2*inset,{0,0,0,a});
+
+        const float inset=profile.band_width*i;
+        const float span_w=float(w)-2.0f*inset;
+        const float span_h=float(h)-2.0f*inset;
+        if(span_w<=0.0f||span_h<=0.0f)break;
+
+        // Fill complete adjacent bands rather than sparse one-pixel rings.
+        // A small overlap prevents sub-pixel gaps after scaling/curvature.
+        const float band=std::min(std::max(1.0f,profile.band_width+0.75f),
+                                  std::max(1.0f,std::min(span_w,span_h)*0.5f));
+        fillAbs(r,inset,inset,span_w,band,{0,0,0,a});
+        if(span_h>band)fillAbs(r,inset,float(h)-inset-band,span_w,band,{0,0,0,a});
+        const float side_h=std::max(0.0f,span_h-2.0f*band);
+        if(side_h>0.0f){
+            fillAbs(r,inset,inset+band,band,side_h,{0,0,0,a});
+            if(span_w>band)fillAbs(r,float(w)-inset-band,inset+band,band,side_h,{0,0,0,a});
+        }
     }
 }
 

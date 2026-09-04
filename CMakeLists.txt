@@ -145,4 +145,8 @@ if(FASTTRIS_BUILD_TESTS AND NOT ANDROID AND NOT EMSCRIPTEN)
     add_executable(fasttris_core_tests tests/core_tests.cpp)
     target_link_libraries(fasttris_core_tests PRIVATE fasttris_core)
     add_test(NAME fasttris_core COMMAND fasttris_core_tests)
+
+    add_executable(fasttris_shader_math_tests tests/shader_math_tests.cpp)
+    target_include_directories(fasttris_shader_math_tests PRIVATE src/app)
+    add_test(NAME fasttris_shader_math COMMAND fasttris_shader_math_tests)
 endif()
