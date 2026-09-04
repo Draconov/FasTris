@@ -17,8 +17,10 @@ It does not store video frames or board snapshots on disk.
 The file begins with the fixed eight-byte current-format magic:
 
 ```text
-FASTRIS 0x01
+FASTRIS 0x02
 ```
+
+The v2 rules payload includes the runtime field profile and entry timing used by the run (`hidden_rows`, `entry_delay_ms`) plus the Guideline-mode bit, so strict 20+20/ARE replays reproduce deterministically. FasTris intentionally supports only the current layout; older binary layouts are rejected rather than guessed.
 
 Numeric metadata is encoded with unsigned variable-length integers where practical. Input events are stored as:
 

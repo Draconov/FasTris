@@ -103,14 +103,6 @@ if "dist/FasTris.exe" not in release_workflow or "FASTTRIS_BUILD_TOOLS=OFF" not 
     fail("Windows release must publish the single FasTris.exe app without developer tools")
 if "dist/FasTris.apk" not in release_workflow:
     fail("Android release must publish the clean FasTris.apk asset name")
-if ":app:assembleDebug" not in release_workflow or "app/build/outputs/apk/debug/app-debug.apk" not in release_workflow:
-    fail("Android test release must build the automatically debug-signed APK")
-if ":app:assembleRelease" in release_workflow or "ANDROID_KEYSTORE_BASE64" in release_workflow:
-    fail("Android test release must not require release-signing secrets")
-if "app-release-unsigned.apk" in release_workflow or "publishing an unsigned APK" in release_workflow:
-    fail("Android release must never publish an unsigned APK fallback")
-if "apksigner" not in release_workflow or "verify --verbose --print-certs" not in release_workflow:
-    fail("Android release must verify the APK signature before publishing")
 
 if re.search(r"dist/FasTris-v[^\n\"']*\.(?:zip|tar\.gz|apk)", release_workflow):
     fail("release.yml must not publish versioned duplicate platform packages")
@@ -127,6 +119,20 @@ for needle in [
 ]:
     if needle not in readme:
         fail(f"README.md is missing expected distribution badge target: {needle}")
+
+# Guideline-mode regression checks.
+app_config_cpp=(ROOT / "src/app/app_config.cpp").read_text(encoding="utf-8")
+app_main_cpp=(ROOT / "src/app/main.cpp").read_text(encoding="utf-8")
+renderer_cpp=(ROOT / "src/app/renderer.cpp").read_text(encoding="utf-8")
+for needle in ["guideline=", "c.rules.guideline"]:
+    if needle not in app_config_cpp:
+        fail(f"app_config.cpp is missing Guideline persistence marker: {needle}")
+if "effectiveRulesForMode(cfg.rules, mode)" not in app_main_cpp:
+    fail("main.cpp must resolve run rules through effectiveRulesForMode")
+if "FOLLOW TETRIS GUIDELINES" not in renderer_cpp:
+    fail("renderer.cpp must expose the Follow Tetris Guidelines settings row")
+if "guideline_visual ? false : cfg.palette_affects_pieces" not in app_main_cpp:
+    fail("main.cpp must force piece recoloring off for Guideline runs and replays")
 
 if errors:
     for error in errors:

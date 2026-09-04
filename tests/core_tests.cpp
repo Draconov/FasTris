@@ -3,6 +3,7 @@
 #include "fasttris/board.hpp"
 #include "fasttris/game.hpp"
 #include "fasttris/replay.hpp"
+#include "fasttris/rules.hpp"
 #include "fasttris/scoring.hpp"
 #include "fasttris/seed.hpp"
 #include "fasttris/sha256.hpp"
@@ -522,11 +523,124 @@ static void test_adaptive_checkpoint_bound() {
     assert(builder.index().checkpoints.back().time_us==long_replay.duration_us);
 }
 
+
+static void test_guideline_rule_profile() {
+    Rules personal;
+    personal.handling.das_ms=311;
+    personal.handling.arr_ms=77;
+    personal.handling.sdf=4;
+    personal.handling.dcd_ms=90;
+    personal.handling.lock_delay_ms=900;
+    personal.handling.max_lock_resets=44;
+    personal.handling.allow_180=true;
+    personal.handling.irs=false;
+    personal.handling.ihs=false;
+    personal.ghost=false;
+    personal.next_count=2;
+    personal.tournament=true;
+    personal.guideline=true;
+    personal.garbage_cap=1;
+    personal.garbage_delay_ms=10;
+    personal.garbage_messiness_pct=99;
+
+    const Rules effective=effectiveRulesForMode(personal,Mode::Marathon);
+    assert(effective.guideline);
+    assert(effective.hidden_rows==20);
+    assert(effective.entry_delay_ms==100);
+    assert(effective.handling.das_ms==167);
+    assert(effective.handling.arr_ms==33);
+    assert(effective.handling.sdf==20);
+    assert(effective.handling.dcd_ms==0);
+    assert(effective.handling.lock_delay_ms==500);
+    assert(effective.handling.max_lock_resets==15);
+    assert(!effective.handling.allow_180);
+    assert(effective.handling.irs&&effective.handling.ihs);
+    assert(effective.ghost);
+    assert(effective.next_count==5);
+    assert(effective.garbage_cap==8);
+    assert(effective.garbage_delay_ms==500);
+    assert(effective.garbage_messiness_pct==25);
+
+    // Resolution must not mutate the user's stored values.
+    assert(personal.handling.das_ms==311);
+    assert(personal.handling.allow_180);
+    assert(personal.next_count==2);
+}
+
+static void test_guideline_board_and_are() {
+    Rules normal;
+    Game legacy(1,Mode::Zen,effectiveRulesForMode(normal,Mode::Zen));
+    assert(legacy.board().height()==24);
+    assert(legacy.hiddenRows()==4);
+    assert(legacy.active().y==3);
+
+    Rules requested;
+    requested.guideline=true;
+    const Rules strict=effectiveRulesForMode(requested,Mode::Zen);
+    Game g(1,Mode::Zen,strict);
+    assert(g.board().height()==40);
+    assert(g.hiddenRows()==20);
+    assert(g.active().y==19);
+    const Rotation before=g.active().rot;
+    g.press(Action::Rotate180);
+    assert(g.active().rot==before);
+    g.press(Action::HardDrop);
+    assert(g.active().piece==Piece::None);
+    g.advanceTo(99999);
+    assert(g.active().piece==Piece::None);
+    g.advanceTo(100000);
+    assert(g.active().piece!=Piece::None);
+}
+
+
+static void test_guideline_lockout_rule() {
+    ActivePiece hidden{Piece::O,Rotation::Spawn,3,18};
+    ActivePiece crossing{Piece::O,Rotation::Spawn,3,19};
+    assert(guidelineLockOut(hidden,20));
+    assert(!guidelineLockOut(crossing,20));
+    hidden.piece=Piece::None;
+    assert(!guidelineLockOut(hidden,20));
+}
+
+static void test_guideline_replay_roundtrip() {
+    Replay r;
+    r.seed=1234;
+    r.mode=Mode::Marathon;
+    r.rules.guideline=true;
+    r.rules.hidden_rows=20;
+    r.rules.entry_delay_ms=100;
+    r.rules=effectiveRulesForMode(r.rules,r.mode);
+    r.duration_us=100000;
+    Game g(r.seed,r.mode,r.rules);
+    g.advanceTo(r.duration_us);
+    r.final_hash=stateHash(g);
+    const auto encoded=serializeReplay(r);
+    assert(!encoded.empty());
+    Replay decoded;
+    std::string err;
+    assert(deserializeReplay(encoded,decoded,&err));
+    assert(decoded.rules.guideline);
+    assert(decoded.rules.hidden_rows==20);
+    assert(decoded.rules.entry_delay_ms==100);
+    assert(verifyReplay(decoded));
+    auto old=encoded;
+    old[7]=static_cast<char>(0x01);
+    Replay rejected;
+    assert(!deserializeReplay(old,rejected,&err));
+}
+
 static void test_battle_smoke() {
     Rules r; r.garbage_delay_ms=0; Battle b(1,2,r,r); b.advanceTo(1000); b.press(0,Action::HardDrop); b.advanceTo(2000); assert(!b.game(0).gameOver()); assert(!b.game(1).gameOver());
+
+    Rules guideline;guideline.guideline=true;guideline.garbage_cap=1;guideline.garbage_delay_ms=7;guideline.garbage_messiness_pct=99;
+    Battle strict(3,4,guideline,guideline);
+    assert(strict.game(0).rules().guideline);
+    assert(strict.game(0).rules().garbage_cap==8);
+    assert(strict.game(0).rules().garbage_delay_ms==500);
+    assert(strict.game(0).rules().garbage_messiness_pct==25);
 }
 
 int main(){
-    test_seed_text_scanning();test_rng_and_bag();test_shapes();test_board();test_game_determinism();test_seed_difference();test_replay();test_replay_validation_and_bounds();test_replay_finalize_trims_post_finish_tail();test_replay_index_and_checkpoints();test_sha();test_irs_ihs();test_replay_fuzz();test_default_horizontal_handling();test_zero_arr_remains_expert_instant_shift();test_zero_arr_preserves_charge_across_spawn();test_modern_scoring();test_finesse_tracking();test_custom_mode_rules();test_mode_basics();test_replay_parser_requires_current_layout();test_replay_incremental_decoder_and_action_filter();test_exact_semantic_events_and_replay_markers();test_adaptive_checkpoint_bound();test_battle_smoke();
+    test_seed_text_scanning();test_rng_and_bag();test_shapes();test_board();test_game_determinism();test_seed_difference();test_replay();test_replay_validation_and_bounds();test_replay_finalize_trims_post_finish_tail();test_replay_index_and_checkpoints();test_sha();test_irs_ihs();test_replay_fuzz();test_default_horizontal_handling();test_zero_arr_remains_expert_instant_shift();test_zero_arr_preserves_charge_across_spawn();test_modern_scoring();test_finesse_tracking();test_custom_mode_rules();test_mode_basics();test_replay_parser_requires_current_layout();test_replay_incremental_decoder_and_action_filter();test_exact_semantic_events_and_replay_markers();test_adaptive_checkpoint_bound();test_guideline_rule_profile();test_guideline_board_and_are();test_guideline_lockout_rule();test_guideline_replay_roundtrip();test_battle_smoke();
     std::cout<<"FasTris core tests: PASS\n";
 }

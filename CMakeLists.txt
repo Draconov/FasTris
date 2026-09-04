@@ -39,6 +39,7 @@ add_library(fasttris_core STATIC
     src/core/game.cpp
     src/core/garbage.cpp
     src/core/replay.cpp
+    src/core/rules.cpp
     src/core/scoring.cpp
     src/core/sha256.cpp
     src/core/tetromino.cpp

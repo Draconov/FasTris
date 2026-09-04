@@ -36,6 +36,7 @@ public:
     bool complete() const { return complete_; }
     bool paused() const { return paused_; }
     int ghostY() const;
+    int hiddenRows() const { return board_.height()-kVisibleH; }
     int level() const;
     std::string deterministicState() const;
     ClearKind lastClear() const { return last_clear_; }
@@ -48,6 +49,7 @@ public:
 
 private:
     void spawn(Piece forced=Piece::None);
+    int spawnY() const { return hiddenRows()-1; }
     bool tryMove(int dx, int dy, bool reset_lock, bool count_finesse=false);
     bool tryRotate(int delta);
     void doHold();
@@ -87,6 +89,7 @@ private:
     TimeUs next_gravity_us_{kNever};
     TimeUs lock_deadline_us_{kNever};
     TimeUs next_horizontal_us_{kNever};
+    TimeUs next_spawn_us_{kNever};
     bool grounded_{};
     int lock_resets_{};
     bool game_over_{};

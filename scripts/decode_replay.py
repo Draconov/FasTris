@@ -15,7 +15,7 @@ from dataclasses import dataclass
 from pathlib import Path
 import sys
 
-MAGIC = b"FASTRIS\x01"
+MAGIC = b"FASTRIS\x02"
 MAX_REPLAY_BYTES = 16 * 1024 * 1024
 MAX_REPLAY_EVENTS = 1_000_000
 MAX_REPLAY_DURATION_US = 12 * 60 * 60 * 1_000_000
@@ -68,7 +68,10 @@ class ReplayRules:
     ihs: bool
     ghost: bool
     tournament: bool
+    guideline: bool
     next_count: int
+    hidden_rows: int
+    entry_delay_ms: int
     garbage_cap: int
     garbage_delay_ms: int
     garbage_messiness_pct: int
@@ -132,7 +135,7 @@ def decode_replay(data: bytes) -> Replay:
 
     reader = Reader(data)
     if reader.read_raw(len(MAGIC), "replay header") != MAGIC:
-        raise ReplayDecodeError("unsupported replay format (expected FASTRIS binary v1)")
+        raise ReplayDecodeError("unsupported replay format (expected FASTRIS binary v2)")
 
     seed = reader.read_varuint("replay seed")
     mode = reader.read_byte("replay mode")
@@ -147,7 +150,7 @@ def decode_replay(data: bytes) -> Replay:
     max_lock_resets = reader.read_bounded_varuint(1000, "max lock resets")
 
     flags = reader.read_byte("rule flags")
-    if flags & 0xE0:
+    if flags & 0xC0:
         raise ReplayDecodeError(f"invalid rule flags: 0x{flags:02x}")
 
     rules = ReplayRules(
@@ -162,7 +165,10 @@ def decode_replay(data: bytes) -> Replay:
         ihs=bool(flags & 0x04),
         ghost=bool(flags & 0x08),
         tournament=bool(flags & 0x10),
+        guideline=bool(flags & 0x20),
         next_count=reader.read_bounded_varuint(8, "next queue count", minimum=1),
+        hidden_rows=reader.read_bounded_varuint(20, "hidden row count", minimum=4),
+        entry_delay_ms=reader.read_bounded_varuint(5000, "entry delay"),
         garbage_cap=reader.read_bounded_varuint(100, "garbage cap"),
         garbage_delay_ms=reader.read_bounded_varuint(60000, "garbage delay"),
         garbage_messiness_pct=reader.read_bounded_varuint(100, "garbage messiness"),
@@ -171,6 +177,20 @@ def decode_replay(data: bytes) -> Replay:
         custom_time_limit_s=reader.read_bounded_varuint(43_200, "custom time limit"),
         custom_start_garbage=reader.read_bounded_varuint(12, "custom starting garbage"),
     )
+
+    if rules.guideline:
+        strict = (
+            rules.das_ms == 167 and rules.arr_ms == 33 and rules.sdf == 20 and rules.dcd_ms == 0
+            and rules.lock_delay_ms == 500 and rules.max_lock_resets == 15
+            and not rules.allow_180 and rules.irs and rules.ihs and rules.ghost
+            and rules.next_count == 5 and rules.hidden_rows == 20 and rules.entry_delay_ms == 100
+            and rules.garbage_cap == 8 and rules.garbage_delay_ms == 500
+            and rules.garbage_messiness_pct == 25
+        )
+        if not strict:
+            raise ReplayDecodeError("Guideline replay does not contain the strict Guideline rule profile")
+    elif rules.hidden_rows != 4 or rules.entry_delay_ms != 0:
+        raise ReplayDecodeError("non-Guideline replay must use the legacy 4 hidden rows and 0 ms ARE")
 
     duration_us = reader.read_bounded_varuint(MAX_REPLAY_DURATION_US, "replay duration")
     event_count = reader.read_bounded_varuint(MAX_REPLAY_EVENTS, "replay event count")
@@ -230,7 +250,7 @@ def render_text(replay: Replay, source: Path, include_events: bool = True) -> st
         "FasTris replay decoded",
         "======================",
         f"File: {source}",
-        "Format: FASTRIS binary v1 (.ftr)",
+        "Format: FASTRIS binary v2 (.ftr)",
         f"Game mode: {MODE_NAMES[replay.mode]}",
         f"Seed: {replay.seed}",
         f"Duration: {format_time_us(replay.duration_us)} ({replay.duration_us} us)",
@@ -250,7 +270,10 @@ def render_text(replay: Replay, source: Path, include_events: bool = True) -> st
         f"IHS / initial hold: {yes_no(rules.ihs)}",
         f"Ghost piece: {yes_no(rules.ghost)}",
         f"Tournament rules: {yes_no(rules.tournament)}",
+        f"Follow Tetris Guidelines: {yes_no(rules.guideline)}",
         f"Next queue pieces shown: {rules.next_count}",
+        f"Hidden rows: {rules.hidden_rows}",
+        f"Entry delay / ARE: {rules.entry_delay_ms} ms",
         f"Garbage cap: {rules.garbage_cap}",
         f"Garbage delay: {rules.garbage_delay_ms} ms",
         f"Garbage messiness: {rules.garbage_messiness_pct}%",

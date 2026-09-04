@@ -9,7 +9,9 @@ using TimeUs = std::int64_t;
 constexpr int kBoardW = 10;
 constexpr int kVisibleH = 20;
 constexpr int kHiddenH = 4;
+constexpr int kGuidelineHiddenH = 20;
 constexpr int kBoardH = kVisibleH + kHiddenH;
+constexpr int kMaxBoardH = kVisibleH + kGuidelineHiddenH;
 constexpr TimeUs kNever = (std::int64_t{1} << 61);
 
 enum class Piece : std::uint8_t { None=0, I, J, L, O, S, T, Z, Garbage };
@@ -59,6 +61,9 @@ struct Rules {
     bool ghost{true};
     int next_count{5};
     bool tournament{false};
+    bool guideline{false};
+    int hidden_rows{kHiddenH};
+    int entry_delay_ms{0};
     int garbage_cap{8};
     int garbage_delay_ms{500};
     int garbage_messiness_pct{25};

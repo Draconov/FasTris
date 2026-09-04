@@ -764,6 +764,7 @@ bool loadConfig(const std::string&path,AppConfig&c){
             else if(k=="texturegridsize")c.texture_grid_size=n;
             else if(k.rfind("shaderslot",0)==0)applyShaderSlotValue(c,k,n);
             else if(k=="tournament")c.rules.tournament=n!=0;
+            else if(k=="guideline")c.rules.guideline=n!=0;
             else if(k.rfind("key",0)==0){int i=std::stoi(k.substr(3));if(i>=0&&i<(int)c.keys.size())c.keys[i]=static_cast<SDL_Keycode>(n);}
             else if(k.rfind("pad",0)==0){int i=std::stoi(k.substr(3));if(i>=0&&i<(int)c.pads.size())c.pads[i]=n;}
         }catch(...){}
@@ -812,7 +813,8 @@ bool saveConfig(const std::string&path,const AppConfig&c){
      <<"\ntexturespacing="<<c.texture_spacing
      <<"\ntexturelinethickness="<<c.texture_line_thickness
      <<"\ntexturegridsize="<<c.texture_grid_size
-     <<"\ntournament="<<c.rules.tournament;
+     <<"\ntournament="<<c.rules.tournament
+     <<"\nguideline="<<c.rules.guideline;
     for(std::size_t i=0;i<c.shader_slots.size();++i)
         writeShaderSlot(f,static_cast<int>(i),c.shader_slots[i]);
     f<<"\n";

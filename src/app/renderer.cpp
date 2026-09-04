@@ -1,4 +1,5 @@
 #include "renderer.hpp"
+#include "fasttris/rules.hpp"
 #include "fasttris/version.hpp"
 #include "fasttris/tetromino.hpp"
 #include <algorithm>
@@ -552,7 +553,7 @@ void capturePieceGhostSample(Game& g,float bx,float by,float cell,float render_s
     if(g_palette_affects_pieces)piece_color=paletteColor(piece_color);
     sample.color=piece_color;
     for(auto block:blocks(active.piece,active.rot)){
-        const int visible_y=active.y+block.y-kHiddenH;
+        const int visible_y=active.y+block.y-g.hiddenRows();
         if(visible_y<0||visible_y>=kVisibleH||sample.block_count>=4)continue;
         const float design_x=bx+(active.x+block.x)*cell;
         const float design_y=by+visible_y*cell;
@@ -1317,10 +1318,10 @@ void renderGame(SDL_Renderer*r,Game&g,const RenderInfo&i){
     // playfield
     fill(r,bx-4,by-4,board_w+8,board_h+8,{30,35,45,255});
     fill(r,bx,by,board_w,board_h,{14,18,24,255});
-    for(int yy=0;yy<kVisibleH;++yy)for(int x=0;x<kBoardW;++x){int y=yy+kHiddenH;auto p=g.board().cell(x,y);if(p!=Piece::None)drawTexturedCell(r,bx+x*cell,by+yy*cell,cell,color(p));}
+    for(int yy=0;yy<kVisibleH;++yy)for(int x=0;x<kBoardW;++x){int y=yy+g.hiddenRows();auto p=g.board().cell(x,y);if(p!=Piece::None)drawTexturedCell(r,bx+x*cell,by+yy*cell,cell,color(p));}
     if(g.active().piece!=Piece::None){
-        if(g.rules().ghost){auto a=g.active();a.y=g.ghostY();for(auto b:blocks(a.piece,a.rot)){int y=a.y+b.y-kHiddenH;if(y>=0){auto c=color(a.piece);c.a=85;outlinePiece(r,bx+(a.x+b.x)*cell+3,by+y*cell+3,cell-6,cell-6,c);}}}
-        auto&a=g.active();for(auto b:blocks(a.piece,a.rot)){int y=a.y+b.y-kHiddenH;if(y>=0&&y<kVisibleH)drawTexturedCell(r,bx+(a.x+b.x)*cell,by+y*cell,cell,color(a.piece));}
+        if(g.rules().ghost){auto a=g.active();a.y=g.ghostY();for(auto b:blocks(a.piece,a.rot)){int y=a.y+b.y-g.hiddenRows();if(y>=0){auto c=color(a.piece);c.a=85;outlinePiece(r,bx+(a.x+b.x)*cell+3,by+y*cell+3,cell-6,cell-6,c);}}}
+        auto&a=g.active();for(auto b:blocks(a.piece,a.rot)){int y=a.y+b.y-g.hiddenRows();if(y>=0&&y<kVisibleH)drawTexturedCell(r,bx+(a.x+b.x)*cell,by+y*cell,cell,color(a.piece));}
     }
     txt(r,bx,by-38,"FASTRIS",{235,240,248,255},true);
     txt(r,bx+120,by-34,std::string(modeName(g.mode())),{130,210,255,255},true);
@@ -1484,12 +1485,10 @@ void renderSettings(SDL_Renderer*r,const AppConfig&c,int sel,bool editing,const 
     set(r,{11,14,20,255});SDL_RenderClear(r);
     txt(r,330,18,"SETTINGS",{235,240,248,255},true);
 
-    auto h=c.rules.handling;
-    bool ghost=c.rules.ghost;
-    int next=c.rules.next_count;
-    if(c.rules.tournament){
-        h.lock_delay_ms=500;h.max_lock_resets=15;h.allow_180=false;h.irs=true;h.ihs=true;ghost=true;next=5;
-    }
+    const Rules effective=effectiveRulesForMode(c.rules,Mode::Sprint40);
+    auto h=effective.handling;
+    bool ghost=effective.ghost;
+    int next=effective.next_count;
 
     const bool blink=(SDL_GetTicks()/350)%2==0;
     auto number=[&](int item,const std::string&normal){
@@ -1513,6 +1512,7 @@ void renderSettings(SDL_Renderer*r,const AppConfig&c,int sel,bool editing,const 
         std::string("VSYNC           ")+(c.vsync?"ON":"OFF"),
         "FPS CAP         "+number(SettingFpsCap,c.fps_cap==0?"0":std::to_string(c.fps_cap))+(c.fps_cap==0&&!(editing&&sel==SettingFpsCap)?" (UNCAPPED)":""),
         std::string("TOURNAMENT      ")+(c.rules.tournament?"ON":"OFF"),
+        std::string("FOLLOW TETRIS GUIDELINES   ")+(c.rules.guideline?"ON":"OFF"),
         "SEED SETTINGS",
         "CONTROLS",
         "MISCELLANEOUS",
@@ -1520,7 +1520,7 @@ void renderSettings(SDL_Renderer*r,const AppConfig&c,int sel,bool editing,const 
     };
 
     for(int n=0;n<SettingCount;++n){
-        const bool locked=c.rules.tournament&&n>=SettingLock&&n<=SettingNext;
+        const bool locked=(c.rules.guideline&&n>=SettingDas&&n<=SettingNext)||(c.rules.tournament&&n>=SettingLock&&n<=SettingNext);
         const bool action=n>=SettingSeedMenu;
         C normal=action?C{190,198,210,255}:C{210,215,225,255};
         if(n==SettingReset)normal={245,180,110,255};
@@ -1544,13 +1544,15 @@ void renderSettings(SDL_Renderer*r,const AppConfig&c,int sel,bool editing,const 
         "Synchronize presentation to the display refresh.",
         "Render cap when VSync is disabled. Enter 0 for uncapped.",
         "Apply the locked competitive ruleset during runs.",
+        "Strict 20+20 Guideline profile; overrides Tournament while ON and restores personal settings when OFF.",
         "Open seed setup, randomize, copy and paste tools.",
         "Open the dedicated keyboard and gamepad rebinding screen.",
         "Graphics area for shaders, textures and the active presentation palette.",
         "Restore gameplay/display preferences. Seed and controls stay unchanged."
     };
 
-    if(c.rules.tournament)txt(r,220,560,"TOURNAMENT LOCK: placement rules marked [LOCKED] are fixed during runs",{255,190,100,255});
+    if(c.rules.guideline)txt(r,220,560,"GUIDELINE LOCK: strict handling, SRS, 20 hidden rows, 100 ms ARE and standard piece colors",{120,220,255,255});
+    else if(c.rules.tournament)txt(r,220,560,"TOURNAMENT LOCK: placement rules marked [LOCKED] are fixed during runs",{255,190,100,255});
     if(!status.empty())txt(r,220,586,status,{255,205,100,255},true);
     txt(r,220,612,hint[std::clamp(sel,0,SettingCount-1)],{150,165,182,255});
     txt(r,220,646,editing?"TYPE NUMBER   ENTER apply   ESC cancel":"ENTER edit/open/toggle   LEFT/RIGHT change   ESC save + back",{135,145,160,255});
@@ -1693,14 +1695,15 @@ void renderMiscellaneous(SDL_Renderer*r,const AppConfig&cfg,int sel,const std::s
         else if(n==kMiscTexturesIndex)txt(r,value_x,y,textureName(cfg.texture),row_color,true);
         else if(n==kMiscPalettesIndex)txt(r,value_x,y,paletteName(cfg.palette),row_color,true);
         else if(n==kMiscPalettePiecesIndex){
-            const C toggle_color=selected?C{120,220,255,255}:(cfg.palette_affects_pieces?C{125,220,170,255}:C{235,150,125,255});
-            txt(r,value_x,y,cfg.palette_affects_pieces?"ON":"OFF",toggle_color,true);
+            const bool effective_piece_palette=cfg.rules.guideline?false:cfg.palette_affects_pieces;
+            const C toggle_color=selected?C{120,220,255,255}:(effective_piece_palette?C{125,220,170,255}:C{235,150,125,255});
+            txt(r,value_x,y,effective_piece_palette?(cfg.rules.guideline?"OFF [LOCKED]":"ON"):(cfg.rules.guideline?"OFF [LOCKED]":"OFF"),toggle_color,true);
         }
     }
     if(sel==kMiscShadersIndex)txt(r,265,545,"ENTER open shader settings",{150,205,220,255},true);
     else if(sel==kMiscTexturesIndex)txt(r,265,545,"ENTER open procedural texture settings",{150,205,220,255},true);
     else if(sel==kMiscPalettesIndex)txt(r,265,545,"ENTER open palette settings",{150,205,220,255},true);
-    else if(sel==kMiscPalettePiecesIndex)txt(r,265,545,"ENTER or LEFT/RIGHT toggle piece recoloring",{150,205,220,255},true);
+    else if(sel==kMiscPalettePiecesIndex)txt(r,265,545,cfg.rules.guideline?"STANDARD PIECE COLORS [LOCKED BY GUIDELINE]":"ENTER or LEFT/RIGHT toggle piece recoloring",{150,205,220,255},true);
     else txt(r,265,545,"ENTER restore all graphics presentation defaults",{245,180,110,255},true);
     if(!status.empty())txt(r,265,585,status,{255,205,100,255},true);
     txt(r,265,630,"UP/DOWN select   ENTER open/toggle   ESC back to Settings",{135,145,160,255});
@@ -1824,8 +1827,9 @@ void renderTextureSettings(SDL_Renderer*r,const AppConfig&cfg,int sel){
     drawTexturedCell(r,ix,iy+ps*2,ps,color(Piece::I));
     drawTexturedCell(r,ix,iy+ps*3,ps,color(Piece::I));
     txt(r,panel_x+36,panel_y+382,textureName(cfg.texture),{155,205,220,255});
-    txt(r,panel_x+36,panel_y+402,cfg.palette_affects_pieces?"PIECE PALETTE: ON":"PIECE PALETTE: OFF",
-        cfg.palette_affects_pieces?C{125,220,170,255}:C{235,180,125,255});
+    const bool effective_piece_palette=cfg.rules.guideline?false:cfg.palette_affects_pieces;
+    txt(r,panel_x+36,panel_y+402,effective_piece_palette?"PIECE PALETTE: ON":(cfg.rules.guideline?"PIECE PALETTE: OFF [GUIDELINE]":"PIECE PALETTE: OFF"),
+        effective_piece_palette?C{125,220,170,255}:C{235,180,125,255});
 
     const char* desc="";
     switch(cfg.texture){

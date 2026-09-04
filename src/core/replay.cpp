@@ -1,4 +1,5 @@
 #include "fasttris/replay.hpp"
+#include "fasttris/rules.hpp"
 #include "fasttris/sha256.hpp"
 #include <algorithm>
 #include <array>
@@ -10,7 +11,7 @@
 
 namespace fasttris {
 namespace {
-constexpr std::array<std::uint8_t,8> kReplayMagic{{'F','A','S','T','R','I','S',0x01}};
+constexpr std::array<std::uint8_t,8> kReplayMagic{{'F','A','S','T','R','I','S',0x02}};
 
 void setError(std::string* err, std::string_view message) {
     if (err) *err = std::string(message);
@@ -58,7 +59,8 @@ void hashRules(Sha256& h,const Rules& r){
     hashI32(h,x.das_ms);hashI32(h,x.arr_ms);hashI32(h,x.sdf);hashI32(h,x.dcd_ms);
     hashI32(h,x.lock_delay_ms);hashI32(h,x.max_lock_resets);
     hashBool(h,x.allow_180);hashBool(h,x.irs);hashBool(h,x.ihs);
-    hashBool(h,r.ghost);hashI32(h,r.next_count);hashBool(h,r.tournament);
+    hashBool(h,r.ghost);hashI32(h,r.next_count);hashBool(h,r.tournament);hashBool(h,r.guideline);
+    hashI32(h,r.hidden_rows);hashI32(h,r.entry_delay_ms);
     hashI32(h,r.garbage_cap);hashI32(h,r.garbage_delay_ms);hashI32(h,r.garbage_messiness_pct);
     hashI32(h,r.custom_gravity_ms);hashI32(h,r.custom_line_goal);hashI32(h,r.custom_time_limit_s);hashI32(h,r.custom_start_garbage);
 }
@@ -72,6 +74,20 @@ bool validRules(const Rules& r) {
     if(h.lock_delay_ms<0||h.lock_delay_ms>10000) return false;
     if(h.max_lock_resets<0||h.max_lock_resets>1000) return false;
     if(r.next_count<1||r.next_count>8) return false;
+    if(r.hidden_rows!=kHiddenH&&r.hidden_rows!=kGuidelineHiddenH) return false;
+    if(r.entry_delay_ms<0||r.entry_delay_ms>5000) return false;
+    if(r.guideline&&(r.hidden_rows!=kGuidelineHiddenH||r.entry_delay_ms!=100)) return false;
+    if(!r.guideline&&(r.hidden_rows!=kHiddenH||r.entry_delay_ms!=0)) return false;
+    if(r.guideline){
+        const Rules strict=effectiveRulesForMode(r,Mode::Zen);
+        const auto& a=r.handling;const auto& b=strict.handling;
+        if(a.das_ms!=b.das_ms||a.arr_ms!=b.arr_ms||a.sdf!=b.sdf||a.dcd_ms!=b.dcd_ms||
+           a.lock_delay_ms!=b.lock_delay_ms||a.max_lock_resets!=b.max_lock_resets||
+           a.allow_180!=b.allow_180||a.irs!=b.irs||a.ihs!=b.ihs||r.ghost!=strict.ghost||
+           r.next_count!=strict.next_count||r.hidden_rows!=strict.hidden_rows||
+           r.entry_delay_ms!=strict.entry_delay_ms||r.garbage_cap!=strict.garbage_cap||
+           r.garbage_delay_ms!=strict.garbage_delay_ms||r.garbage_messiness_pct!=strict.garbage_messiness_pct)return false;
+    }
     if(r.garbage_cap<0||r.garbage_cap>100) return false;
     if(r.garbage_delay_ms<0||r.garbage_delay_ms>60000) return false;
     if(r.garbage_messiness_pct<0||r.garbage_messiness_pct>100) return false;
@@ -96,8 +112,11 @@ void writeRules(ByteWriter& w,const Rules& r){
     flags|=h.ihs?0x04u:0u;
     flags|=r.ghost?0x08u:0u;
     flags|=r.tournament?0x10u:0u;
+    flags|=r.guideline?0x20u:0u;
     w.byte(flags);
     w.var(static_cast<std::uint64_t>(r.next_count));
+    w.var(static_cast<std::uint64_t>(r.hidden_rows));
+    w.var(static_cast<std::uint64_t>(r.entry_delay_ms));
     w.var(static_cast<std::uint64_t>(r.garbage_cap));
     w.var(static_cast<std::uint64_t>(r.garbage_delay_ms));
     w.var(static_cast<std::uint64_t>(r.garbage_messiness_pct));
@@ -124,13 +143,13 @@ TimeUs checkpointIntervalFor(TimeUs duration_us) {
 
 Sha256Digest stateHash(const Game& g){
     Sha256 h;
-    static constexpr std::string_view tag="FASTRIS_STATE_BINARY_1";
+    static constexpr std::string_view tag="FASTRIS_STATE_BINARY_2";
     h.update(tag);
     hashUnsignedLE(h,g.seed_);
     hashByte(h,static_cast<std::uint8_t>(g.mode_));
     hashRules(h,g.rules_);
 
-    for(int y=0;y<kBoardH;++y)for(int x=0;x<kBoardW;++x)hashByte(h,static_cast<std::uint8_t>(g.board_.cell(x,y)));
+    for(int y=0;y<g.board_.height();++y)for(int x=0;x<kBoardW;++x)hashByte(h,static_cast<std::uint8_t>(g.board_.cell(x,y)));
 
     hashByte(h,static_cast<std::uint8_t>(g.active_.piece));
     hashByte(h,static_cast<std::uint8_t>(g.active_.rot));
@@ -156,7 +175,7 @@ Sha256Digest stateHash(const Game& g){
     hashUnsignedLE(h,g.garbage_.rngState());hashUnsignedLE(h,g.garbage_.rngStream());hashI32(h,g.garbage_.lastHole());
     hashUnsignedLE(h,g.cheese_rng_.state());hashUnsignedLE(h,g.cheese_rng_.stream());
 
-    hashI64(h,g.now_us_);hashI64(h,g.next_gravity_us_);hashI64(h,g.lock_deadline_us_);hashI64(h,g.next_horizontal_us_);
+    hashI64(h,g.now_us_);hashI64(h,g.next_gravity_us_);hashI64(h,g.lock_deadline_us_);hashI64(h,g.next_horizontal_us_);hashI64(h,g.next_spawn_us_);
     hashBool(h,g.grounded_);hashI32(h,g.lock_resets_);hashBool(h,g.game_over_);hashBool(h,g.complete_);hashBool(h,g.paused_);
     hashBool(h,g.left_held_);hashBool(h,g.right_held_);hashBool(h,g.soft_held_);hashBool(h,g.cw_held_);hashBool(h,g.ccw_held_);
     hashBool(h,g.rot180_held_);hashBool(h,g.hold_held_);hashI32(h,g.horiz_dir_);hashI32(h,g.outgoing_attack_);hashI32(h,g.last_attack_visual_);
@@ -264,13 +283,16 @@ bool ReplayDecoder::readRules(){
     if(!readBoundedVar(10000,h.lock_delay_ms))return false;
     if(!readBoundedVar(1000,h.max_lock_resets))return false;
     std::uint8_t flags{};
-    if(!readByte(flags)||(flags&0xe0u)!=0)return false;
+    if(!readByte(flags)||(flags&0xc0u)!=0)return false;
     h.allow_180=(flags&0x01u)!=0;
     h.irs=(flags&0x02u)!=0;
     h.ihs=(flags&0x04u)!=0;
     r.ghost=(flags&0x08u)!=0;
     r.tournament=(flags&0x10u)!=0;
+    r.guideline=(flags&0x20u)!=0;
     if(!readBoundedVar(8,r.next_count)||r.next_count<1)return false;
+    if(!readBoundedVar(kGuidelineHiddenH,r.hidden_rows))return false;
+    if(!readBoundedVar(5000,r.entry_delay_ms))return false;
     if(!readBoundedVar(100,r.garbage_cap))return false;
     if(!readBoundedVar(60000,r.garbage_delay_ms))return false;
     if(!readBoundedVar(100,r.garbage_messiness_pct))return false;

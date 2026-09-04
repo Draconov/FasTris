@@ -11,6 +11,8 @@ class Board {
 public:
     Board() { clear(); }
     void clear();
+    void setHeight(int height);
+    int height() const { return height_; }
     bool occupied(int x, int y) const;
     Piece cell(int x, int y) const;
     bool collides(const ActivePiece& a) const;
@@ -19,10 +21,11 @@ public:
     bool perfectClear() const;
     bool addGarbageLine(int hole);
     std::uint16_t rowMask(int y) const { return masks_[y]; }
-    const std::array<std::array<std::uint8_t,kBoardW>,kBoardH>& cells() const { return cells_; }
+    const std::array<std::array<std::uint8_t,kBoardW>,kMaxBoardH>& cells() const { return cells_; }
 private:
-    std::array<std::uint16_t,kBoardH> masks_{};
-    std::array<std::array<std::uint8_t,kBoardW>,kBoardH> cells_{};
+    int height_{kBoardH};
+    std::array<std::uint16_t,kMaxBoardH> masks_{};
+    std::array<std::array<std::uint8_t,kBoardW>,kMaxBoardH> cells_{};
 };
 
 } // namespace fasttris

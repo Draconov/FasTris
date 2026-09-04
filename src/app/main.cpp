@@ -2,6 +2,7 @@
 #include "renderer.hpp"
 #include "fasttris/game.hpp"
 #include "fasttris/replay.hpp"
+#include "fasttris/rules.hpp"
 #include "fasttris/seed.hpp"
 #include "fasttris/sha256.hpp"
 #include "fasttris/version.hpp"
@@ -98,35 +99,7 @@ std::uint64_t seedFromText(const std::string& s) {
 }
 
 Rules effectiveRules(const AppConfig& cfg, Mode mode) {
-    Rules rules = cfg.rules;
-
-    // Seed Race must compare like with like. Player handling (DAS/ARR/SDF/DCD)
-    // stays personal, while placement-affecting rules are standardized.
-    if (mode == Mode::SeedRace) {
-        rules.handling.allow_180 = true;
-        rules.handling.irs = true;
-        rules.handling.ihs = true;
-        rules.handling.lock_delay_ms = 500;
-        rules.handling.max_lock_resets = 15;
-        rules.ghost = true;
-        rules.next_count = 5;
-    }
-
-    if (!rules.tournament) return rules;
-
-    // Tournament lock changes only the rules used by the run. Personal settings
-    // remain intact so toggling tournament mode cannot destroy a player's setup.
-    rules.handling.allow_180 = false;
-    rules.handling.irs = true;
-    rules.handling.ihs = true;
-    rules.handling.lock_delay_ms = 500;
-    rules.handling.max_lock_resets = 15;
-    rules.ghost = true;
-    rules.next_count = 5;
-    rules.garbage_cap = 8;
-    rules.garbage_delay_ms = 500;
-    rules.garbage_messiness_pct = 25;
-    return rules;
+    return effectiveRulesForMode(cfg.rules, mode);
 }
 
 std::string preferenceRoot() {
@@ -939,7 +912,12 @@ struct AppState {
     }
 
     bool settingLocked(int item) const {
+        if(cfg.rules.guideline && item>=SettingDas && item<=SettingNext)return true;
         return cfg.rules.tournament && item >= SettingLock && item <= SettingNext;
+    }
+
+    const char* settingLockOwner() const {
+        return cfg.rules.guideline ? "GUIDELINE" : "TOURNAMENT";
     }
 
     static bool numericSetting(int item) {
@@ -956,7 +934,7 @@ struct AppState {
     void beginSettingNumberEdit() {
         if (!numericSetting(settings_sel)) return;
         if (settingLocked(settings_sel)) {
-            settings_status = "LOCKED BY TOURNAMENT";
+            settings_status = std::string("LOCKED BY ")+settingLockOwner();
             return;
         }
         const auto& h = cfg.rules.handling;
@@ -1233,7 +1211,7 @@ struct AppState {
 
     void adjustSetting(int delta) {
         if (settingLocked(settings_sel)) {
-            settings_status = "LOCKED BY TOURNAMENT";
+            settings_status = std::string("LOCKED BY ")+settingLockOwner();
             return;
         }
         auto& h = cfg.rules.handling;
@@ -1268,6 +1246,7 @@ struct AppState {
                 break;
             }
             case SettingTournament: cfg.rules.tournament = !cfg.rules.tournament; break;
+            case SettingGuideline: cfg.rules.guideline = !cfg.rules.guideline; break;
             default: return;
         }
         settings_status.clear();
@@ -1356,12 +1335,12 @@ struct AppState {
             return;
         }
         if (settingLocked(settings_sel)) {
-            settings_status = "LOCKED BY TOURNAMENT";
+            settings_status = std::string("LOCKED BY ")+settingLockOwner();
             return;
         }
         switch (settings_sel) {
             case SettingRotate180: case SettingIrs: case SettingIhs: case SettingGhost:
-            case SettingShowInputs: case SettingVsync: case SettingTournament:
+            case SettingShowInputs: case SettingVsync: case SettingTournament: case SettingGuideline:
                 adjustSetting(1);
                 break;
             case SettingSeedMenu:
@@ -1861,9 +1840,13 @@ struct AppState {
                     palette_sel=static_cast<int>(cfg.palette);
                     screen=Screen::Palettes;
                 }else if((key==SDLK_RETURN||key==SDLK_KP_ENTER||key==SDLK_LEFT||key==SDLK_RIGHT)&&misc_sel==kMiscPalettePiecesIndex){
-                    cfg.palette_affects_pieces=!cfg.palette_affects_pieces;
-                    saveConfig(config_path,cfg);
-                    settings_status=cfg.palette_affects_pieces?"PIECE RECOLORING ON":"PIECE RECOLORING OFF";
+                    if(cfg.rules.guideline){
+                        settings_status="LOCKED BY GUIDELINE: STANDARD PIECE COLORS";
+                    }else{
+                        cfg.palette_affects_pieces=!cfg.palette_affects_pieces;
+                        saveConfig(config_path,cfg);
+                        settings_status=cfg.palette_affects_pieces?"PIECE RECOLORING ON":"PIECE RECOLORING OFF";
+                    }
                 }else if((key==SDLK_RETURN||key==SDLK_KP_ENTER)&&misc_sel==kMiscResetGraphicsIndex){
                     resetGraphics(cfg);
                     shutdownVisualShaderPipeline();
@@ -2095,7 +2078,10 @@ struct AppState {
         processWebReplayDecode();
 #endif
         processSeedClipboard();
-        setVisualPalette(cfg.palette,cfg.palette_affects_pieces);
+        bool guideline_visual=cfg.rules.guideline;
+        if(screen==Screen::Game&&run.game)guideline_visual=run.game->rules().guideline;
+        else if(screen==Screen::Replay&&viewer.game)guideline_visual=viewer.game->rules().guideline;
+        setVisualPalette(cfg.palette, guideline_visual ? false : cfg.palette_affects_pieces);
         setVisualTexture(cfg);
         setVisualShader(cfg);
         beginVisualShaderFrame(ren);

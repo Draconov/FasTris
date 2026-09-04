@@ -1,9 +1,10 @@
 #pragma once
 #include "game.hpp"
+#include "rules.hpp"
 namespace fasttris {
 class Battle {
 public:
-    Battle(std::uint64_t seed_a,std::uint64_t seed_b,Rules a={},Rules b={}) : a_(seed_a,Mode::Zen,a),b_(seed_b,Mode::Zen,b){}
+    Battle(std::uint64_t seed_a,std::uint64_t seed_b,Rules a={},Rules b={}) : a_(seed_a,Mode::Zen,effectiveRulesForMode(a,Mode::Zen)),b_(seed_b,Mode::Zen,effectiveRulesForMode(b,Mode::Zen)){}
     void advanceTo(TimeUs t){a_.advanceTo(t);b_.advanceTo(t);route();}
     void press(int player,Action x){(player==0?a_:b_).press(x);route();}
     void release(int player,Action x){(player==0?a_:b_).release(x);route();}

@@ -1,5 +1,6 @@
 #include "fasttris/game.hpp"
 #include "fasttris/scoring.hpp"
+#include "fasttris/rules.hpp"
 #include "fasttris/tetromino.hpp"
 #include <algorithm>
 #include <array>
@@ -31,10 +32,10 @@ void Game::emitSemanticEvent(GameEventKind kind,int value) {
 }
 
 void Game::restart(std::uint64_t seed, Mode mode) {
-    seed_=seed;mode_=mode;board_.clear();bag_.reset(seed_);
+    seed_=seed;mode_=mode;board_.setHeight(kVisibleH+std::clamp(rules_.hidden_rows,kHiddenH,kGuidelineHiddenH));bag_.reset(seed_);
     garbage_.reset(splitMix64(seed_^0xA11CEULL));cheese_rng_.seed(splitMix64(seed_^0xC4EE5EULL),0xC4EE5EULL);
     active_={};hold_=Piece::None;hold_used_=false;stats_={};stats_.combo=-1;stats_.max_combo=-1;
-    now_us_=0;next_gravity_us_=kNever;lock_deadline_us_=kNever;next_horizontal_us_=kNever;
+    now_us_=0;next_gravity_us_=kNever;lock_deadline_us_=kNever;next_horizontal_us_=kNever;next_spawn_us_=kNever;
     grounded_=false;lock_resets_=0;game_over_=false;complete_=false;paused_=false;
     left_held_=right_held_=soft_held_=false;cw_held_=ccw_held_=rot180_held_=hold_held_=false;horiz_dir_=0;outgoing_attack_=0;last_attack_visual_=0;
     last_action_rotation_=false;last_kick_index_=-1;last_clear_=ClearKind::None;semantic_events_.clear();
@@ -80,7 +81,8 @@ void Game::spawn(Piece forced) {
         else std::swap(hold_,chosen);
         hold_used_=true;++stats_.holds;
     }
-    active_.piece=chosen;active_.rot=Rotation::Spawn;active_.x=3;active_.y=3;
+    active_.piece=chosen;active_.rot=Rotation::Spawn;active_.x=3;active_.y=spawnY();
+    next_spawn_us_=kNever;
     grounded_=false;lock_resets_=0;lock_deadline_us_=kNever;
     last_action_rotation_=false;last_kick_index_=-1;piece_input_count_=0;piece_spawn_x_=active_.x;piece_spawn_rot_=active_.rot;
     if(board_.collides(active_)){game_over_=true;active_.piece=Piece::None;next_gravity_us_=kNever;return;}
@@ -137,7 +139,7 @@ void Game::doHold(){
     Piece incoming=hold_;
     hold_=cur; ++stats_.holds; hold_used_=true;
     if(incoming==Piece::None)incoming=bag_.pop();
-    active_.piece=incoming;active_.rot=Rotation::Spawn;active_.x=3;active_.y=3;grounded_=false;lock_deadline_us_=kNever;lock_resets_=0;
+    active_.piece=incoming;active_.rot=Rotation::Spawn;active_.x=3;active_.y=spawnY();grounded_=false;lock_deadline_us_=kNever;lock_resets_=0;
     last_action_rotation_=false;last_kick_index_=-1;piece_input_count_=0;piece_spawn_x_=3;piece_spawn_rot_=Rotation::Spawn;
     if(board_.collides(active_)){game_over_=true;active_.piece=Piece::None;return;}refreshGrounded(false);scheduleGravityFromNow();
     hold_used_=true; // spawn-like reset above must not permit a second hold.
@@ -186,7 +188,7 @@ int Game::estimatedOptimalFinesseInputs() const {
     std::queue<State> q;
     auto push=[&](int x,Rotation rot,int d){
         if(x<min_x||x>max_x)return;
-        ActivePiece a{active_.piece,rot,x,3};
+        ActivePiece a{active_.piece,rot,x,spawnY()};
         if(empty.collides(a))return;
         int ri=static_cast<int>(rot);
         if(seen[x-min_x][ri])return;
@@ -200,10 +202,10 @@ int Game::estimatedOptimalFinesseInputs() const {
         push(s.x-1,s.rot,s.d+1);
         push(s.x+1,s.rot,s.d+1);
 
-        ActivePiece left{active_.piece,s.rot,s.x,3};
+        ActivePiece left{active_.piece,s.rot,s.x,spawnY()};
         while(true){auto n=left;--n.x;if(empty.collides(n))break;left=n;}
         if(left.x!=s.x)push(left.x,left.rot,s.d+1);
-        ActivePiece right{active_.piece,s.rot,s.x,3};
+        ActivePiece right{active_.piece,s.rot,s.x,spawnY()};
         while(true){auto n=right;++n.x;if(empty.collides(n))break;right=n;}
         if(right.x!=s.x)push(right.x,right.rot,s.d+1);
 
@@ -212,7 +214,7 @@ int Game::estimatedOptimalFinesseInputs() const {
             auto to=rotated(s.rot,delta);
             auto tests=(std::abs(delta)==2)?kickTests180(active_.piece,s.rot):kickTests(active_.piece,s.rot,to);
             for(auto k:tests){
-                ActivePiece n{active_.piece,to,s.x+k.x,3+k.y};
+                ActivePiece n{active_.piece,to,s.x+k.x,spawnY()+k.y};
                 if(!empty.collides(n)){push(n.x,n.rot,s.d+1);break;}
             }
         };
@@ -237,6 +239,7 @@ void Game::lockPiece(){
         ++stats_.finesse_streak;
         stats_.max_finesse_streak=std::max(stats_.max_finesse_streak,stats_.finesse_streak);
     }else stats_.finesse_streak=0;
+    const bool lock_out=rules_.guideline&&guidelineLockOut(active_,hiddenRows());
     board_.stamp(active_);auto cr=board_.clearFullLines();bool pc=cr.lines>0&&board_.perfectClear();last_clear_=classifyClear(spin,cr.lines);
     if(cr.lines>0){++stats_.combo;stats_.max_combo=std::max(stats_.max_combo,stats_.combo);}else stats_.combo=-1;
     bool difficult=(last_clear_==ClearKind::Quad||last_clear_==ClearKind::MiniSingle||last_clear_==ClearKind::MiniDouble||last_clear_==ClearKind::TSpinSingle||last_clear_==ClearKind::TSpinDouble||last_clear_==ClearKind::TSpinTriple);
@@ -257,7 +260,14 @@ void Game::lockPiece(){
         for(int i=0;i<add;++i){int hole=static_cast<int>(cheese_rng_.bounded(kBoardW));if(!board_.addGarbageLine(hole)){game_over_=true;break;}}
     }
     applyReadyGarbage();checkModeCompletion();
-    if(!game_over_&&!complete_)spawn();else{active_.piece=Piece::None;next_gravity_us_=lock_deadline_us_=kNever;}
+    if(lock_out)game_over_=true;
+    if(!game_over_&&!complete_){
+        active_.piece=Piece::None;
+        next_gravity_us_=lock_deadline_us_=kNever;
+        const int are_ms=std::max(0,rules_.entry_delay_ms);
+        if(are_ms==0)spawn();
+        else next_spawn_us_=now_us_+ms(are_ms);
+    }else{active_.piece=Piece::None;next_gravity_us_=lock_deadline_us_=next_spawn_us_=kNever;}
 }
 
 void Game::seedStartingGarbage(int lines){
@@ -336,6 +346,7 @@ void Game::advanceTo(TimeUs target){
     auto repairStaleTimers=[&](){
         if(next_horizontal_us_<now_us_)next_horizontal_us_=now_us_;
         if(next_gravity_us_<now_us_)next_gravity_us_=now_us_;
+        if(next_spawn_us_<now_us_)next_spawn_us_=now_us_;
         if(grounded_&&lock_deadline_us_<now_us_)lock_deadline_us_=now_us_;
     };
 
@@ -359,6 +370,7 @@ void Game::advanceTo(TimeUs target){
         TimeUs next=target;
         next=std::min(next,next_horizontal_us_);
         next=std::min(next,next_gravity_us_);
+        next=std::min(next,next_spawn_us_);
         if(grounded_)next=std::min(next,lock_deadline_us_);
         const TimeUs limit=modeTimeLimit();
         if(limit<kNever/2)next=std::min(next,limit);
@@ -370,6 +382,7 @@ void Game::advanceTo(TimeUs target){
 
         bool progressed=false;
         if(next_horizontal_us_==now_us_){processHorizontalRepeat();progressed=true;}
+        if(!game_over_&&!complete_&&next_spawn_us_==now_us_){spawn();progressed=true;}
         if(!game_over_&&!complete_&&next_gravity_us_==now_us_){
             const bool moved=tryMove(0,1,false,false);
             if(moved&&soft_held_&&rules_.handling.sdf>0){++stats_.score;++stats_.soft_drop_cells;}
@@ -392,6 +405,7 @@ void Game::advanceTo(TimeUs target){
                     else next_horizontal_us_=now_us_+ms(std::max(1,rules_.handling.arr_ms));
                 }
                 if(next_gravity_us_<=now_us_)scheduleGravityFromNow();
+                if(next_spawn_us_<=now_us_)next_spawn_us_=now_us_+std::max<TimeUs>(1,ms(std::max(1,rules_.entry_delay_ms)));
                 if(grounded_&&lock_deadline_us_<=now_us_)lock_deadline_us_=now_us_+std::max<TimeUs>(1,ms(std::max(0,rules_.handling.lock_delay_ms)));
                 same_timestamp_passes=0;
             }
@@ -406,8 +420,9 @@ void Game::advanceTo(TimeUs target){
 std::string Game::deterministicState() const {
     std::ostringstream o;
     o<<"fastris-state\n"<<seed_<<' '<<static_cast<int>(mode_)<<' '<<now_us_<<' '<<game_over_<<' '<<complete_<<'\n';
-    for(int y=0;y<kBoardH;++y){o<<board_.rowMask(y)<<',';for(int x=0;x<kBoardW;++x)o<<static_cast<int>(board_.cell(x,y));o<<'\n';}
+    for(int y=0;y<board_.height();++y){o<<board_.rowMask(y)<<',';for(int x=0;x<kBoardW;++x)o<<static_cast<int>(board_.cell(x,y));o<<'\n';}
     o<<static_cast<int>(active_.piece)<<' '<<static_cast<int>(active_.rot)<<' '<<active_.x<<' '<<active_.y<<' '<<static_cast<int>(hold_)<<' '<<hold_used_<<'\n';
+    o<<next_spawn_us_<<'\n';
     o<<stats_.score<<' '<<stats_.lines<<' '<<stats_.pieces<<' '<<stats_.attacks<<' '<<stats_.inputs<<' '<<stats_.holds<<' '<<stats_.rotations<<' '<<stats_.hard_drops<<' '<<stats_.soft_drop_cells<<' '<<stats_.quads<<' '<<stats_.tspins<<' '<<stats_.perfect_clears<<' '<<stats_.combo<<' '<<stats_.max_combo<<' '<<stats_.b2b_chain<<' '<<stats_.max_b2b<<' '<<stats_.finesse_faults<<' '<<stats_.finesse_perfect_pieces<<' '<<stats_.finesse_streak<<' '<<stats_.max_finesse_streak<<' '<<stats_.garbage_lines_cleared<<'\n';
     auto q=bag_.queue();int n=0;for(auto p:q){o<<static_cast<int>(p)<<',';if(++n==14)break;}o<<'\n'<<bag_.rngState()<<'\n';return o.str();
 }
