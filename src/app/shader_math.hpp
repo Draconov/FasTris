@@ -32,4 +32,31 @@ inline int vignetteAlphaAt(int base_alpha, float normalized_inset, int softness)
     return std::clamp(static_cast<int>(std::lround(base_alpha * shaped)), 0, 255);
 }
 
+inline int vignetteAlphaAtPoint(int width, int height, float x, float y,
+                                int base_alpha, int radius, int softness) {
+    if (base_alpha <= 0 || width <= 0 || height <= 0) return 0;
+
+    const float half_w = std::max(1.0f, width * 0.5f);
+    const float half_h = std::max(1.0f, height * 0.5f);
+    const float nx = std::abs((x - half_w) / half_w);
+    const float ny = std::abs((y - half_h) / half_h);
+    const float distance = std::sqrt(nx * nx + ny * ny);
+
+    // Radius controls how far inward the vignette begins. A larger radius
+    // keeps the center clearer; corners still reach the requested strength.
+    const float radius01 = std::clamp(radius, 0, 100) / 100.0f;
+    const float inner = 0.42f + radius01 * 0.48f;
+    constexpr float outer = 1.41421356237f;
+    float t = (distance - inner) / std::max(0.001f, outer - inner);
+    t = std::clamp(t, 0.0f, 1.0f);
+
+    // Smoothstep removes contour discontinuities. Softness broadens the
+    // transition without changing the maximum corner opacity.
+    t = t * t * (3.0f - 2.0f * t);
+    const float soft = std::clamp(softness, 0, 100) / 100.0f;
+    const float exponent = 2.35f - 1.35f * soft;
+    const float shaped = std::pow(t, exponent);
+    return std::clamp(static_cast<int>(std::lround(base_alpha * shaped)), 0, 255);
+}
+
 } // namespace fasttris::app::shader_math

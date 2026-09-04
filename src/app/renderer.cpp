@@ -821,30 +821,55 @@ void applyDotMask(SDL_Renderer*r,int w,int h,int spacing,int dot_size,int alpha)
 }
 
 void applyVignette(SDL_Renderer*r,int w,int h,int alpha,int radius,int softness){
-    if(alpha<=0)return;
-    const auto profile=shader_math::vignetteProfile(w,h,radius,softness);
-    for(int i=0;i<profile.layers;++i){
-        const float normalized=profile.layers>1?float(i)/float(profile.layers-1):0.0f;
-        const Uint8 a=static_cast<Uint8>(shader_math::vignetteAlphaAt(alpha,normalized,softness));
-        if(a==0)continue;
+    if(alpha<=0||w<=0||h<=0)return;
 
-        const float inset=profile.band_width*i;
-        const float span_w=float(w)-2.0f*inset;
-        const float span_h=float(h)-2.0f*inset;
-        if(span_w<=0.0f||span_h<=0.0f)break;
+    // Render a true elliptical gradient. The old implementation stacked
+    // rectangular border bands, which remained visible as contour lines even
+    // when the bands touched. A modest triangle mesh lets SDL interpolate the
+    // per-vertex alpha continuously across the entire screen.
+    constexpr int kCols=49;
+    constexpr int kRows=29;
+    constexpr int kVertexCount=kCols*kRows;
+    constexpr int kIndexCount=(kCols-1)*(kRows-1)*6;
+    static std::array<SDL_Vertex,kVertexCount> vertices{};
+    static std::array<int,kIndexCount> indices{};
+    static bool indices_ready=false;
 
-        // Fill complete adjacent bands rather than sparse one-pixel rings.
-        // A small overlap prevents sub-pixel gaps after scaling/curvature.
-        const float band=std::min(std::max(1.0f,profile.band_width+0.75f),
-                                  std::max(1.0f,std::min(span_w,span_h)*0.5f));
-        fillAbs(r,inset,inset,span_w,band,{0,0,0,a});
-        if(span_h>band)fillAbs(r,inset,float(h)-inset-band,span_w,band,{0,0,0,a});
-        const float side_h=std::max(0.0f,span_h-2.0f*band);
-        if(side_h>0.0f){
-            fillAbs(r,inset,inset+band,band,side_h,{0,0,0,a});
-            if(span_w>band)fillAbs(r,float(w)-inset-band,inset+band,band,side_h,{0,0,0,a});
+    if(!indices_ready){
+        int out=0;
+        for(int y=0;y<kRows-1;++y){
+            for(int x=0;x<kCols-1;++x){
+                const int a=y*kCols+x;
+                const int b=a+1;
+                const int c=a+kCols;
+                const int d=c+1;
+                indices[static_cast<std::size_t>(out++)]=a;
+                indices[static_cast<std::size_t>(out++)]=b;
+                indices[static_cast<std::size_t>(out++)]=d;
+                indices[static_cast<std::size_t>(out++)]=a;
+                indices[static_cast<std::size_t>(out++)]=d;
+                indices[static_cast<std::size_t>(out++)]=c;
+            }
+        }
+        indices_ready=true;
+    }
+
+    int vertex=0;
+    for(int y=0;y<kRows;++y){
+        const float py=float(h)*float(y)/float(kRows-1);
+        for(int x=0;x<kCols;++x){
+            const float px=float(w)*float(x)/float(kCols-1);
+            const int vertex_alpha=shader_math::vignetteAlphaAtPoint(
+                w,h,px,py,alpha,radius,softness);
+            SDL_Vertex& out=vertices[static_cast<std::size_t>(vertex++)];
+            out.position={px,py};
+            out.color={0.0f,0.0f,0.0f,vertex_alpha/255.0f};
+            out.tex_coord={0.0f,0.0f};
         }
     }
+
+    SDL_SetRenderDrawBlendMode(r,SDL_BLENDMODE_BLEND);
+    SDL_RenderGeometry(r,nullptr,vertices.data(),kVertexCount,indices.data(),kIndexCount);
 }
 
 void applyFlicker(SDL_Renderer*r,int w,int h,int alpha){
