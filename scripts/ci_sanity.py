@@ -206,6 +206,34 @@ for marker in [
 if "updateMusic();\n        if(directNumberEditing())" in app_main_cpp:
     fail("updateMusic must run after SDL_RenderPresent so audio bootstrap cannot delay visible input feedback")
 
+# Web music must be isolated from SDL input/audio, and every backend must fail open.
+web_music_path = ROOT / "src/app/music_manager_web.cpp"
+if not web_music_path.is_file():
+    fail("missing dedicated Web Audio music backend: src/app/music_manager_web.cpp")
+else:
+    web_music_cpp = web_music_path.read_text(encoding="utf-8")
+    for marker in ["AudioContext", "decodeAudioData", "passive: true", "ctx.suspend()", "ctx.resume()"]:
+        if marker not in web_music_cpp:
+            fail(f"Web music backend missing non-blocking Web Audio marker: {marker}")
+    for forbidden in ["SDL_OpenAudioDeviceStream", "SDL_InitSubSystem", "SDL_PutAudioStreamData", "preventDefault(", "stopPropagation("]:
+        if forbidden in web_music_cpp:
+            fail(f"Web music backend must not couple audio to SDL/browser input: {forbidden}")
+
+if "list(APPEND FASTTRIS_APP_SOURCES src/app/music_manager_web.cpp)" not in cmake_text:
+    fail("CMake must compile the dedicated Web Audio backend for Emscripten")
+if 'if(NOT EMSCRIPTEN AND ".ogg" IN_LIST FASTTRIS_MUSIC_EXTENSIONS)' not in cmake_text:
+    fail("native OGG decoder dependency must be excluded from Emscripten")
+if 'if(NOT EMSCRIPTEN AND ".mp3" IN_LIST FASTTRIS_MUSIC_EXTENSIONS)' not in cmake_text:
+    fail("native MP3 decoder dependency must be excluded from Emscripten")
+
+on_event_match = re.search(r"SDL_AppResult onEvent\(SDL_Event& ev\) \{(.*?)\n    SDL_AppResult iterate\(\)", app_main_cpp, flags=re.S)
+if on_event_match and "ensureMusicInitialized(true)" in on_event_match.group(1):
+    fail("SDL input event handling must never synchronously initialize Web music")
+if "#if defined(__EMSCRIPTEN__)\n        ensureMusicInitialized(false);" not in app_main_cpp:
+    fail("Web music backend must be initialized independently of user input")
+if "fatal_error" not in music_manager_cpp or "SDL_DestroyAudioStream(impl_->output)" not in music_manager_cpp:
+    fail("native MusicManager must tear down only music after fatal runtime audio failure")
+
 if errors:
     for error in errors:
         print(f"ERROR: {error}", file=sys.stderr)

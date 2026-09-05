@@ -734,7 +734,17 @@ struct AppState {
     }
 
     void ensureMusicInitialized(bool user_gesture=false) {
-#if defined(__ANDROID__)
+#if defined(__EMSCRIPTEN__)
+        // Web music uses a dedicated Web Audio backend. It installs passive
+        // browser gesture listeners of its own, so SDL keyboard/touch/gamepad
+        // event handling never initializes, decodes or pumps music.
+        (void)user_gesture;
+        if (music_init_attempted) return;
+        music_init_attempted = true;
+        music.setVolume(cfg.music_volume);
+        if (!music.initialize())
+            std::cerr << "Music disabled: " << music.lastError() << "\n";
+#elif defined(__ANDROID__)
         (void)user_gesture;
 
         if (music_startup.starting() && music_init_done.load(std::memory_order_acquire)) {
@@ -780,13 +790,8 @@ struct AppState {
             music_init_done.store(true, std::memory_order_release);
         });
 #else
-        if (music.available() || music_init_attempted) return;
-#if defined(__EMSCRIPTEN__)
-        // Browser audio contexts are created/resumed from a user gesture.
-        if (!user_gesture) return;
-#else
         (void)user_gesture;
-#endif
+        if (music.available() || music_init_attempted) return;
         music_init_attempted = true;
         if (!audio_subsystem_ready) {
             audio_subsystem_ready = SDL_InitSubSystem(SDL_INIT_AUDIO);
@@ -812,6 +817,10 @@ struct AppState {
 #if defined(__ANDROID__)
         if (!music_startup.ready()) return;
 #endif
+        // update() is intentionally non-blocking. On native platforms it also
+        // tears down an audio stream that reported a fatal callback/device
+        // error, ensuring backend failure degrades to silence only.
+        music.update();
         if (!music.available()) return;
 
         MusicTrack desired = MusicTrack::Menu;
@@ -829,7 +838,6 @@ struct AppState {
         music.setVolume(cfg.music_volume);
         music.setDesiredTrack(desired);
         music.setPaused(paused);
-        music.update();
     }
 
     bool lastReplayExists() const {
@@ -1632,7 +1640,9 @@ struct AppState {
         SDL_SetWindowMinimumSize(win, 480, 360);
 #endif
         SDL_SetRenderVSync(ren, cfg.vsync ? 1 : 0);
-#if !defined(__EMSCRIPTEN__) && !defined(__ANDROID__)
+#if defined(__EMSCRIPTEN__)
+        ensureMusicInitialized(false);
+#elif !defined(__ANDROID__)
         ensureMusicInitialized(false);
 #endif
 
@@ -1678,12 +1688,6 @@ struct AppState {
 #endif
             return SDL_APP_CONTINUE;
         }
-#if defined(__EMSCRIPTEN__)
-        if (ev.type == SDL_EVENT_KEY_DOWN || ev.type == SDL_EVENT_MOUSE_BUTTON_DOWN ||
-            ev.type == SDL_EVENT_FINGER_DOWN || ev.type == SDL_EVENT_GAMEPAD_BUTTON_DOWN)
-            ensureMusicInitialized(true);
-#endif
-
 #if defined(__ANDROID__)
         const Uint32 android_event_type = g_android_touch_event_type.load(std::memory_order_relaxed);
         if (android_event_type != 0 && ev.type == android_event_type) {

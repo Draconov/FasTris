@@ -121,6 +121,7 @@ struct MusicManager::Impl {
     std::atomic<int> volume_percent{70};
     std::atomic<bool> paused{false};
     std::atomic<bool> lifecycle_suspended{false};
+    std::atomic<bool> fatal_error{false};
     bool device_paused{true}; // Main/control thread only after initialization completes.
     std::uint64_t fade_frames_done{}; // Audio callback thread only after resume.
     mutable std::mutex error_mutex;
@@ -175,6 +176,7 @@ struct MusicManager::Impl {
                                      : SDL_ResumeAudioStreamDevice(output);
         if (!ok) {
             setError(std::string(should_pause ? "could not pause music: " : "could not resume music: ") + SDL_GetError());
+            fatal_error.store(true, std::memory_order_release);
             return;
         }
         device_paused = should_pause;
@@ -257,7 +259,12 @@ struct MusicManager::Impl {
         int frames_remaining = (additional_amount + kMixFrameBytes - 1) / kMixFrameBytes;
         while (frames_remaining > 0) {
             const int frames = std::min(frames_remaining, kMixFrames);
-            if (!self->renderChunk(frames)) return;
+            if (!self->renderChunk(frames)) {
+                // Never let a broken audio backend spin forever. The SDL app
+                // loop will observe this latch and tear down only music.
+                self->fatal_error.store(true, std::memory_order_release);
+                return;
+            }
             frames_remaining -= frames;
         }
     }
@@ -274,6 +281,7 @@ MusicManager::~MusicManager() { shutdown(); }
 
 bool MusicManager::initialize() {
     if (impl_->output) return true;
+    impl_->fatal_error.store(false, std::memory_order_relaxed);
     impl_->clearError();
     const auto spec = mixSpec();
     impl_->output = SDL_OpenAudioDeviceStream(
@@ -316,9 +324,12 @@ void MusicManager::shutdown() {
     impl_->incoming.reset();
     impl_->current.reset();
     impl_->fade_frames_done = 0;
+    impl_->fatal_error.store(false, std::memory_order_relaxed);
 }
 
-bool MusicManager::available() const { return impl_ && impl_->output != nullptr; }
+bool MusicManager::available() const {
+    return impl_ && impl_->output != nullptr && !impl_->fatal_error.load(std::memory_order_acquire);
+}
 std::string MusicManager::lastError() const { return impl_ ? impl_->errorCopy() : std::string{}; }
 void MusicManager::setVolume(int value) { impl_->volume_percent.store(std::clamp(value, 0, 100), std::memory_order_relaxed); }
 int MusicManager::volume() const { return impl_->volume_percent.load(std::memory_order_relaxed); }
@@ -346,6 +357,20 @@ void MusicManager::setLifecycleSuspended(bool value) {
 void MusicManager::update() {
     // Intentionally tiny: all decode/refill work is demand-driven by SDL's
     // audio callback. The application/event loop must never pump music data.
+    // If the callback/device reports a fatal error, destroy only the audio
+    // stream here on the control thread and leave gameplay/input untouched.
+    if (impl_->fatal_error.load(std::memory_order_acquire)) {
+        if (impl_->output) {
+            SDL_PauseAudioStreamDevice(impl_->output);
+            SDL_DestroyAudioStream(impl_->output);
+            impl_->output = nullptr;
+        }
+        impl_->incoming.reset();
+        impl_->current.reset();
+        impl_->fade_frames_done = 0;
+        impl_->device_paused = true;
+        return;
+    }
     impl_->syncDevicePause();
 }
 

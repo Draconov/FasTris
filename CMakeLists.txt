@@ -93,7 +93,7 @@ if(FASTTRIS_BUILD_APP)
         "${FASTTRIS_MUSIC_MENU_EXT}"
         "${FASTTRIS_MUSIC_GAMEPLAY_EXT}"
         "${FASTTRIS_MUSIC_INTENSE_EXT}")
-    if(".ogg" IN_LIST FASTTRIS_MUSIC_EXTENSIONS)
+    if(NOT EMSCRIPTEN AND ".ogg" IN_LIST FASTTRIS_MUSIC_EXTENSIONS)
         FetchContent_Declare(fasttris_stb
             URL https://github.com/nothings/stb/archive/f1c79c02822848a9bed4315b12c8c8f3761e1296.tar.gz
             ${FASTTRIS_FETCH_TIMESTAMP_ARGS}
@@ -102,7 +102,7 @@ if(FASTTRIS_BUILD_APP)
         FetchContent_MakeAvailable(fasttris_stb)
         set(FASTTRIS_HAS_OGG TRUE)
     endif()
-    if(".mp3" IN_LIST FASTTRIS_MUSIC_EXTENSIONS)
+    if(NOT EMSCRIPTEN AND ".mp3" IN_LIST FASTTRIS_MUSIC_EXTENSIONS)
         # Pinned after the 2026 dr_mp3 bounds/overflow fixes.
         FetchContent_Declare(fasttris_dr_libs
             URL https://github.com/mackron/dr_libs/archive/8a7258cc66b49387ad58cc5b81568982a3560d49.tar.gz
@@ -156,10 +156,19 @@ if(FASTTRIS_BUILD_APP)
         src/app/app_config.cpp
         src/app/renderer.cpp
         src/app/music_policy.cpp
-        src/app/music_manager.cpp
-        src/app/audio_codecs.cpp
         "${FASTTRIS_GENERATED_MUSIC_CPP}"
     )
+    if(EMSCRIPTEN)
+        # Browser builds use Web Audio directly. Keeping SDL audio/codec work
+        # out of the browser input loop prevents music from ever starving SDL
+        # keyboard, touch or gamepad event delivery.
+        list(APPEND FASTTRIS_APP_SOURCES src/app/music_manager_web.cpp)
+    else()
+        list(APPEND FASTTRIS_APP_SOURCES
+            src/app/music_manager.cpp
+            src/app/audio_codecs.cpp
+        )
+    endif()
 
     if(ANDROID)
         # SDLActivity expects the application entry point in libmain.so.
@@ -245,6 +254,7 @@ if(FASTTRIS_BUILD_TESTS AND NOT ANDROID AND NOT EMSCRIPTEN)
     find_package(Python3 COMPONENTS Interpreter QUIET)
     if(Python3_Interpreter_FOUND)
         add_test(NAME fasttris_music_embed COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_embed_music.py")
+        add_test(NAME fasttris_web_music_backend COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_web_music_backend.py")
     endif()
 
     if(FASTTRIS_BUILD_APP)
