@@ -59,6 +59,11 @@ if(FASTTRIS_BUILD_APP)
     include(FetchContent)
     find_package(Python3 COMPONENTS Interpreter REQUIRED)
 
+    set(FASTTRIS_FETCH_TIMESTAMP_ARGS)
+    if(CMAKE_VERSION VERSION_GREATER_EQUAL "3.24")
+        list(APPEND FASTTRIS_FETCH_TIMESTAMP_ARGS DOWNLOAD_EXTRACT_TIMESTAMP TRUE)
+    endif()
+
     function(fastris_find_music_asset slot out_path out_ext)
         file(GLOB _candidates CONFIGURE_DEPENDS
             "${CMAKE_CURRENT_SOURCE_DIR}/assets/music/${slot}.ogg"
@@ -87,7 +92,7 @@ if(FASTTRIS_BUILD_APP)
     if(".ogg" IN_LIST FASTTRIS_MUSIC_EXTENSIONS)
         FetchContent_Declare(fasttris_stb
             URL https://github.com/nothings/stb/archive/f1c79c02822848a9bed4315b12c8c8f3761e1296.tar.gz
-            DOWNLOAD_EXTRACT_TIMESTAMP TRUE
+            ${FASTTRIS_FETCH_TIMESTAMP_ARGS}
             SOURCE_SUBDIR __fasttris_header_only
         )
         FetchContent_MakeAvailable(fasttris_stb)
@@ -97,7 +102,7 @@ if(FASTTRIS_BUILD_APP)
         # Pinned after the 2026 dr_mp3 bounds/overflow fixes.
         FetchContent_Declare(fasttris_dr_libs
             URL https://github.com/mackron/dr_libs/archive/8a7258cc66b49387ad58cc5b81568982a3560d49.tar.gz
-            DOWNLOAD_EXTRACT_TIMESTAMP TRUE
+            ${FASTTRIS_FETCH_TIMESTAMP_ARGS}
             SOURCE_SUBDIR __fasttris_header_only
         )
         FetchContent_MakeAvailable(fasttris_dr_libs)
@@ -137,7 +142,7 @@ if(FASTTRIS_BUILD_APP)
         FetchContent_Declare(SDL3
             URL https://github.com/libsdl-org/SDL/releases/download/release-3.4.14/SDL3-3.4.14.tar.gz
             URL_HASH SHA256=30d4aa2b3037718142b32dffd4e72f917ebb6cc5227150e7bb9c45efb2153aeb
-            DOWNLOAD_EXTRACT_TIMESTAMP TRUE
+            ${FASTTRIS_FETCH_TIMESTAMP_ARGS}
         )
         FetchContent_MakeAvailable(SDL3)
     endif()

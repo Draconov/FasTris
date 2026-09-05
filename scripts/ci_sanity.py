@@ -55,6 +55,18 @@ for rel, needles in checks.items():
             fail(f"{rel} is missing expected identity marker: {needle}")
 
 
+# CMake compatibility regression: Android intentionally uses CMake 3.22.1, while
+# the project floor is 3.20. DOWNLOAD_EXTRACT_TIMESTAMP was added only in 3.24,
+# so it must never appear directly inside FetchContent_Declare() at this floor.
+cmake_text = (ROOT / "CMakeLists.txt").read_text(encoding="utf-8")
+minimum_match = re.search(r"cmake_minimum_required\(VERSION\s+(\d+)\.(\d+)", cmake_text)
+if minimum_match and tuple(map(int, minimum_match.groups())) < (3, 24):
+    for block in re.findall(r"FetchContent_Declare\(.*?\n\s*\)", cmake_text, flags=re.S):
+        if "DOWNLOAD_EXTRACT_TIMESTAMP" in block:
+            fail("CMake < 3.24 cannot use DOWNLOAD_EXTRACT_TIMESTAMP directly in FetchContent_Declare; use the version-gated compatibility args")
+    if 'CMAKE_VERSION VERSION_GREATER_EQUAL "3.24"' not in cmake_text:
+        fail("CMake must version-gate DOWNLOAD_EXTRACT_TIMESTAMP for the Android CMake 3.22.1 toolchain")
+
 # CI regression checks for platform-specific failures seen on clean GitHub runners.
 build_workflow = (ROOT / ".github/workflows/build.yml").read_text(encoding="utf-8")
 release_workflow = (ROOT / ".github/workflows/release.yml").read_text(encoding="utf-8")
