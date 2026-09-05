@@ -3,12 +3,14 @@
 #include "music_assets.hpp"
 #include <SDL3/SDL.h>
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
 #include <memory>
+#include <optional>
 #include <mutex>
 #include <string>
 #include <utility>
@@ -114,8 +116,9 @@ private:
 
 struct MusicManager::Impl {
     SDL_AudioStream* output{};
-    std::unique_ptr<Voice> current;
-    std::unique_ptr<Voice> incoming;
+    std::array<std::unique_ptr<Voice>, static_cast<std::size_t>(MusicTrack::Count)> voices;
+    MusicTrack current_track{MusicTrack::Menu}; // Audio callback thread after initialization.
+    std::optional<MusicTrack> incoming_track; // Audio callback thread after initialization.
     std::atomic<int> desired{static_cast<int>(MusicTrack::Menu)};
     std::atomic<int> logical_current{static_cast<int>(MusicTrack::Menu)};
     std::atomic<int> volume_percent{70};
@@ -167,6 +170,23 @@ struct MusicManager::Impl {
         return true;
     }
 
+    Voice* voiceFor(MusicTrack track) const {
+        const auto index = static_cast<std::size_t>(track);
+        if (index >= voices.size()) return nullptr;
+        return voices[index].get();
+    }
+
+    bool prepareAllVoices() {
+        for (std::size_t i = 0; i < voices.size(); ++i) {
+            const auto track = static_cast<MusicTrack>(i);
+            if (!openVoice(track, voices[i])) {
+                for (auto& voice : voices) voice.reset();
+                return false;
+            }
+        }
+        return true;
+    }
+
     void syncDevicePause() {
         if (!output) return;
         const bool should_pause = paused.load(std::memory_order_relaxed) ||
@@ -184,15 +204,23 @@ struct MusicManager::Impl {
 
     bool renderChunk(int frames) {
         const MusicTrack wanted = desiredTrack();
-        if (!current && !openVoice(wanted, current)) return false;
-        if (current && current->track() != wanted) {
-            if (!incoming || incoming->track() != wanted) {
-                incoming.reset();
+        Voice* current = voiceFor(current_track);
+        if (!current) {
+            setError("prepared current music voice is unavailable");
+            return false;
+        }
+
+        if (current_track != wanted) {
+            if (!incoming_track || *incoming_track != wanted) {
+                if (!voiceFor(wanted)) {
+                    setError("prepared requested music voice is unavailable");
+                    return true; // Keep the working track playing.
+                }
+                incoming_track = wanted;
                 fade_frames_done = 0;
-                if (!openVoice(wanted, incoming)) return true; // Keep the working track playing.
             }
-        } else if (incoming) {
-            incoming.reset();
+        } else if (incoming_track) {
+            incoming_track.reset();
             fade_frames_done = 0;
         }
 
@@ -200,9 +228,12 @@ struct MusicManager::Impl {
         if (!current->render(a.data(), frames, render_error)) {
             setError(render_error);
             render_error.clear();
+            Voice* incoming = incoming_track ? voiceFor(*incoming_track) : nullptr;
             if (incoming && incoming->render(a.data(), frames, render_error)) {
-                current = std::move(incoming);
-                logical_current.store(static_cast<int>(current->track()), std::memory_order_relaxed);
+                current_track = *incoming_track;
+                current = incoming;
+                logical_current.store(static_cast<int>(current_track), std::memory_order_relaxed);
+                incoming_track.reset();
                 fade_frames_done = 0;
             } else {
                 if (!render_error.empty()) setError(render_error);
@@ -211,14 +242,15 @@ struct MusicManager::Impl {
         }
 
         const float master = static_cast<float>(volume_percent.load(std::memory_order_relaxed)) / 100.0f;
-        if (!incoming) {
+        if (!incoming_track) {
             for (int i = 0; i < frames * kMixChannels; ++i)
                 mix[static_cast<std::size_t>(i)] = a[static_cast<std::size_t>(i)] * master;
         } else {
+            Voice* incoming = voiceFor(*incoming_track);
             render_error.clear();
-            if (!incoming->render(b.data(), frames, render_error)) {
+            if (!incoming || !incoming->render(b.data(), frames, render_error)) {
                 if (!render_error.empty()) setError(render_error);
-                incoming.reset();
+                incoming_track.reset();
                 fade_frames_done = 0;
                 for (int i = 0; i < frames * kMixChannels; ++i)
                     mix[static_cast<std::size_t>(i)] = a[static_cast<std::size_t>(i)] * master;
@@ -235,8 +267,9 @@ struct MusicManager::Impl {
                 }
                 fade_frames_done += static_cast<std::uint64_t>(frames);
                 if (fade_frames_done >= total) {
-                    current = std::move(incoming);
-                    logical_current.store(static_cast<int>(current->track()), std::memory_order_relaxed);
+                    current_track = *incoming_track;
+                    logical_current.store(static_cast<int>(current_track), std::memory_order_relaxed);
+                    incoming_track.reset();
                     fade_frames_done = 0;
                 }
             }
@@ -283,28 +316,36 @@ bool MusicManager::initialize() {
     if (impl_->output) return true;
     impl_->fatal_error.store(false, std::memory_order_relaxed);
     impl_->clearError();
+
+    // Decoder construction and SDL_AudioStream conversion setup may allocate or
+    // perform substantial codec work. Prepare every possible music voice on the
+    // control/startup thread before SDL can ever invoke the realtime callback.
+    if (!impl_->prepareAllVoices()) return false;
+
+    // Select the initial prepared voice before opening the device. Once the
+    // SDL stream exists, current_track/incoming_track belong to the callback
+    // thread until the stream is destroyed.
+    const MusicTrack wanted = impl_->desiredTrack();
+    impl_->current_track = wanted;
+    impl_->incoming_track.reset();
+    impl_->logical_current.store(static_cast<int>(wanted), std::memory_order_relaxed);
+
     const auto spec = mixSpec();
     impl_->output = SDL_OpenAudioDeviceStream(
         SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK, &spec, &Impl::musicAudioCallback, impl_.get());
     if (!impl_->output) {
         impl_->setError(std::string("SDL_OpenAudioDeviceStream failed: ") + SDL_GetError());
+        for (auto& voice : impl_->voices) voice.reset();
         return false;
     }
     impl_->device_paused = true;
-    const MusicTrack wanted = impl_->desiredTrack();
-    if (!impl_->openVoice(wanted, impl_->current)) {
-        SDL_DestroyAudioStream(impl_->output);
-        impl_->output = nullptr;
-        return false;
-    }
-    impl_->logical_current.store(static_cast<int>(wanted), std::memory_order_relaxed);
 
     // Keep startup bounded: prebuffer only two small chunks, then let SDL ask
     // for exactly the amount it needs through musicAudioCallback. Decoding and
     // queue refills never run from SDL_AppIterate, so input delivery cannot be
     // starved by audio work.
     if (!impl_->boundedInitialPrebuffer()) {
-        impl_->current.reset();
+        for (auto& voice : impl_->voices) voice.reset();
         SDL_DestroyAudioStream(impl_->output);
         impl_->output = nullptr;
         return false;
@@ -321,8 +362,8 @@ void MusicManager::shutdown() {
     }
     if (impl_->output) SDL_DestroyAudioStream(impl_->output);
     impl_->output = nullptr;
-    impl_->incoming.reset();
-    impl_->current.reset();
+    impl_->incoming_track.reset();
+    for (auto& voice : impl_->voices) voice.reset();
     impl_->fade_frames_done = 0;
     impl_->fatal_error.store(false, std::memory_order_relaxed);
 }
@@ -365,8 +406,8 @@ void MusicManager::update() {
             SDL_DestroyAudioStream(impl_->output);
             impl_->output = nullptr;
         }
-        impl_->incoming.reset();
-        impl_->current.reset();
+        impl_->incoming_track.reset();
+        for (auto& voice : impl_->voices) voice.reset();
         impl_->fade_frames_done = 0;
         impl_->device_paused = true;
         return;
