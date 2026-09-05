@@ -15,7 +15,7 @@ public:
     bool initialize();
     void shutdown();
     bool available() const;
-    const std::string& lastError() const;
+    std::string lastError() const;
 
     void setVolume(int volume_percent);
     int volume() const;

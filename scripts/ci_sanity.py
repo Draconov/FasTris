@@ -180,8 +180,14 @@ for marker in [
 ]:
     if marker not in app_main_cpp:
         fail(f"Android-safe delayed music startup marker missing from main.cpp: {marker}")
-if "primeQueue" not in music_manager_cpp or "if (!impl_->primeQueue())" not in music_manager_cpp:
-    fail("MusicManager must prebuffer PCM before resuming the SDL audio device")
+if "musicAudioCallback" not in music_manager_cpp:
+    fail("MusicManager must refill playback from SDL's audio callback instead of the app iterate loop")
+if re.search(r"void\s+MusicManager::update\(\)\s*\{[^}]*primeQueue", music_manager_cpp, flags=re.S):
+    fail("MusicManager::update must never decode/refill audio on the SDL app loop")
+if "primeQueue" in music_manager_cpp:
+    fail("MusicManager must not use an app-loop polling primeQueue refill path")
+if "kInitialPrebufferChunks" not in music_manager_cpp:
+    fail("MusicManager must use a small bounded startup prebuffer before device resume")
 
 # Android audio-device creation/decoding must not run synchronously inside the
 # SDL main/event loop. SDL_InitSubSystem stays on the main thread, while the
