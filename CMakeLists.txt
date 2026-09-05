@@ -56,6 +56,69 @@ else()
 endif()
 
 if(FASTTRIS_BUILD_APP)
+    include(FetchContent)
+    find_package(Python3 COMPONENTS Interpreter REQUIRED)
+
+    function(fastris_find_music_asset slot out_path out_ext)
+        file(GLOB _candidates CONFIGURE_DEPENDS
+            "${CMAKE_CURRENT_SOURCE_DIR}/assets/music/${slot}.ogg"
+            "${CMAKE_CURRENT_SOURCE_DIR}/assets/music/${slot}.mp3"
+            "${CMAKE_CURRENT_SOURCE_DIR}/assets/music/${slot}.wav"
+        )
+        list(LENGTH _candidates _count)
+        if(NOT _count EQUAL 1)
+            message(FATAL_ERROR
+                "Music slot '${slot}' requires exactly one source file: ${slot}.ogg, ${slot}.mp3, or ${slot}.wav. Found ${_count}.")
+        endif()
+        list(GET _candidates 0 _asset)
+        get_filename_component(_ext "${_asset}" EXT)
+        string(TOLOWER "${_ext}" _ext)
+        set(${out_path} "${_asset}" PARENT_SCOPE)
+        set(${out_ext} "${_ext}" PARENT_SCOPE)
+    endfunction()
+
+    fastris_find_music_asset(menu FASTTRIS_MUSIC_MENU FASTTRIS_MUSIC_MENU_EXT)
+    fastris_find_music_asset(gameplay FASTTRIS_MUSIC_GAMEPLAY FASTTRIS_MUSIC_GAMEPLAY_EXT)
+    fastris_find_music_asset(intense FASTTRIS_MUSIC_INTENSE FASTTRIS_MUSIC_INTENSE_EXT)
+    set(FASTTRIS_MUSIC_EXTENSIONS
+        "${FASTTRIS_MUSIC_MENU_EXT}"
+        "${FASTTRIS_MUSIC_GAMEPLAY_EXT}"
+        "${FASTTRIS_MUSIC_INTENSE_EXT}")
+    if(".ogg" IN_LIST FASTTRIS_MUSIC_EXTENSIONS)
+        FetchContent_Declare(fasttris_stb
+            URL https://github.com/nothings/stb/archive/f1c79c02822848a9bed4315b12c8c8f3761e1296.tar.gz
+            DOWNLOAD_EXTRACT_TIMESTAMP TRUE
+            SOURCE_SUBDIR __fasttris_header_only
+        )
+        FetchContent_MakeAvailable(fasttris_stb)
+        set(FASTTRIS_HAS_OGG TRUE)
+    endif()
+    if(".mp3" IN_LIST FASTTRIS_MUSIC_EXTENSIONS)
+        # Pinned after the 2026 dr_mp3 bounds/overflow fixes.
+        FetchContent_Declare(fasttris_dr_libs
+            URL https://github.com/mackron/dr_libs/archive/8a7258cc66b49387ad58cc5b81568982a3560d49.tar.gz
+            DOWNLOAD_EXTRACT_TIMESTAMP TRUE
+            SOURCE_SUBDIR __fasttris_header_only
+        )
+        FetchContent_MakeAvailable(fasttris_dr_libs)
+        set(FASTTRIS_HAS_MP3 TRUE)
+    endif()
+
+    set(FASTTRIS_GENERATED_MUSIC_CPP "${CMAKE_CURRENT_BINARY_DIR}/generated/music_assets.cpp")
+    add_custom_command(
+        OUTPUT "${FASTTRIS_GENERATED_MUSIC_CPP}"
+        COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/scripts/embed_music.py"
+                --source-dir "${CMAKE_CURRENT_SOURCE_DIR}/assets/music"
+                --output "${FASTTRIS_GENERATED_MUSIC_CPP}"
+        DEPENDS
+            "${CMAKE_CURRENT_SOURCE_DIR}/scripts/embed_music.py"
+            "${FASTTRIS_MUSIC_MENU}"
+            "${FASTTRIS_MUSIC_GAMEPLAY}"
+            "${FASTTRIS_MUSIC_INTENSE}"
+        COMMENT "Embedding FasTris music assets"
+        VERBATIM
+    )
+
     if(EMSCRIPTEN)
         # SDL's callback main loop maps to requestAnimationFrame. SDL also
         # mounts this path with IDBFS when built with the option below.
@@ -67,7 +130,6 @@ if(FASTTRIS_BUILD_APP)
         # Android's Gradle/Prefab build supplies SDL3 from the official AAR.
         find_package(SDL3 CONFIG REQUIRED)
     else()
-        include(FetchContent)
         set(SDL_TESTS OFF CACHE BOOL "" FORCE)
         set(SDL_EXAMPLES OFF CACHE BOOL "" FORCE)
         set(SDL_SHARED OFF CACHE BOOL "" FORCE)
@@ -84,6 +146,10 @@ if(FASTTRIS_BUILD_APP)
         src/app/main.cpp
         src/app/app_config.cpp
         src/app/renderer.cpp
+        src/app/music_policy.cpp
+        src/app/music_manager.cpp
+        src/app/audio_codecs.cpp
+        "${FASTTRIS_GENERATED_MUSIC_CPP}"
     )
 
     if(ANDROID)
@@ -108,6 +174,14 @@ if(FASTTRIS_BUILD_APP)
 
     target_link_libraries(${FASTTRIS_APP_TARGET} PRIVATE fasttris_core SDL3::SDL3)
     target_include_directories(${FASTTRIS_APP_TARGET} PRIVATE src/app)
+    if(FASTTRIS_HAS_OGG)
+        target_include_directories(${FASTTRIS_APP_TARGET} PRIVATE "${fasttris_stb_SOURCE_DIR}")
+        target_compile_definitions(${FASTTRIS_APP_TARGET} PRIVATE FASTTRIS_HAS_OGG=1)
+    endif()
+    if(FASTTRIS_HAS_MP3)
+        target_include_directories(${FASTTRIS_APP_TARGET} PRIVATE "${fasttris_dr_libs_SOURCE_DIR}")
+        target_compile_definitions(${FASTTRIS_APP_TARGET} PRIVATE FASTTRIS_HAS_MP3=1)
+    endif()
     if(MSVC)
         target_compile_options(${FASTTRIS_APP_TARGET} PRIVATE /W4 /permissive-)
     else()
@@ -149,4 +223,21 @@ if(FASTTRIS_BUILD_TESTS AND NOT ANDROID AND NOT EMSCRIPTEN)
     add_executable(fasttris_shader_math_tests tests/shader_math_tests.cpp)
     target_include_directories(fasttris_shader_math_tests PRIVATE src/app)
     add_test(NAME fasttris_shader_math COMMAND fasttris_shader_math_tests)
+
+    add_executable(fasttris_music_policy_tests tests/music_policy_tests.cpp src/app/music_policy.cpp)
+    target_include_directories(fasttris_music_policy_tests PRIVATE src/app)
+    target_link_libraries(fasttris_music_policy_tests PRIVATE fasttris_core)
+    add_test(NAME fasttris_music_policy COMMAND fasttris_music_policy_tests)
+
+    find_package(Python3 COMPONENTS Interpreter QUIET)
+    if(Python3_Interpreter_FOUND)
+        add_test(NAME fasttris_music_embed COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_embed_music.py")
+    endif()
+
+    if(FASTTRIS_BUILD_APP)
+        add_executable(fasttris_app_config_music_tests tests/app_config_music_tests.cpp src/app/app_config.cpp)
+        target_include_directories(fasttris_app_config_music_tests PRIVATE src/app)
+        target_link_libraries(fasttris_app_config_music_tests PRIVATE SDL3::SDL3)
+        add_test(NAME fasttris_app_config_music COMMAND fasttris_app_config_music_tests)
+    endif()
 endif()

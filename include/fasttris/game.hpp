@@ -19,6 +19,7 @@ public:
     void press(Action a);
     void release(Action a);
     void enqueueGarbage(int lines, TimeUs ready_us, int forced_hole=-1);
+    int pendingGarbageLines() const;
     int consumeOutgoingAttack();
 
     const Board& board() const { return board_; }

@@ -134,6 +134,28 @@ if "FOLLOW TETRIS GUIDELINES" not in renderer_cpp:
 if "guideline_visual ? false : cfg.palette_affects_pieces" not in app_main_cpp:
     fail("main.cpp must force piece recoloring off for Guideline runs and replays")
 
+
+# Music-system regression checks.
+app_config_hpp=(ROOT / "src/app/app_config.hpp").read_text(encoding="utf-8")
+music_manager_cpp=(ROOT / "src/app/music_manager.cpp").read_text(encoding="utf-8")
+music_policy_cpp=(ROOT / "src/app/music_policy.cpp").read_text(encoding="utf-8")
+for slot in ["menu", "gameplay", "intense"]:
+    matches=[ROOT / "assets/music" / f"{slot}.{ext}" for ext in ["ogg", "mp3", "wav"]]
+    matches=[path for path in matches if path.is_file()]
+    if len(matches) != 1:
+        fail(f"music slot {slot!r} must contain exactly one .ogg/.mp3/.wav source; found {len(matches)}")
+for rel in ["scripts/embed_music.py", "src/app/music_manager.cpp", "src/app/music_policy.cpp"]:
+    if not (ROOT / rel).is_file():
+        fail(f"missing built-in music system file: {rel}")
+if "music_volume{70}" not in app_config_hpp:
+    fail("AppConfig must keep a persisted 0-100 music volume with a 70% default")
+if "SDL_OpenAudioDeviceStream" not in music_manager_cpp or "kMusicCrossfadeSeconds" not in music_manager_cpp:
+    fail("MusicManager must stream through SDL3 and use the shared crossfade duration")
+if "kMusicIntenseOnPressure" not in music_policy_cpp or "pending_garbage_lines" not in music_policy_cpp:
+    fail("music policy must retain mode-aware intensity and garbage-pressure handling")
+if "Music slot '${slot}' requires exactly one source file" not in (ROOT / "CMakeLists.txt").read_text(encoding="utf-8"):
+    fail("CMake must reject missing/duplicate menu/gameplay/intense music source formats")
+
 if errors:
     for error in errors:
         print(f"ERROR: {error}", file=sys.stderr)

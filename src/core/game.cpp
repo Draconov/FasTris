@@ -291,6 +291,11 @@ void Game::applyReadyGarbage(){
     for(int i=0;i<n;++i){int h=garbage_.popReadyHole(now_us_,std::clamp(rules_.garbage_messiness_pct,0,100));if(h<0)break;if(!board_.addGarbageLine(h)){game_over_=true;break;}}
 }
 void Game::enqueueGarbage(int lines,TimeUs ready,int hole){garbage_.enqueue(lines,ready,hole);}
+int Game::pendingGarbageLines() const {
+    int total=0;
+    for(const auto& packet:garbage_.packets()) total+=std::max(0,packet.lines);
+    return total;
+}
 int Game::consumeOutgoingAttack(){int n=outgoing_attack_;outgoing_attack_=0;return n;}
 
 void Game::setHorizontal(int dir,bool down){

@@ -168,6 +168,7 @@ struct AppConfig {
     bool vsync{false};
     bool show_inputs{true};
     int fps_cap{480}; // 0 = uncapped
+    int music_volume{70}; // 0 = muted
 
     VisualPalette palette{VisualPalette::Default};
     bool palette_affects_pieces{true};

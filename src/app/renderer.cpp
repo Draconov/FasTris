@@ -1549,6 +1549,7 @@ void renderSettings(SDL_Renderer*r,const AppConfig&c,int sel,bool editing,const 
         std::string("SHOW INPUTS     ")+(c.show_inputs?"ON":"OFF"),
         std::string("VSYNC           ")+(c.vsync?"ON":"OFF"),
         "FPS CAP         "+number(SettingFpsCap,c.fps_cap==0?"0":std::to_string(c.fps_cap))+(c.fps_cap==0&&!(editing&&sel==SettingFpsCap)?" (UNCAPPED)":""),
+        "MUSIC VOLUME    "+number(SettingMusicVolume,std::to_string(c.music_volume))+"%",
         std::string("TOURNAMENT      ")+(c.rules.tournament?"ON":"OFF"),
         std::string("FOLLOW TETRIS GUIDELINES   ")+(c.rules.guideline?"ON":"OFF"),
         "SEED SETTINGS",
@@ -1563,7 +1564,7 @@ void renderSettings(SDL_Renderer*r,const AppConfig&c,int sel,bool editing,const 
         C normal=action?C{190,198,210,255}:C{210,215,225,255};
         if(n==SettingReset)normal={245,180,110,255};
         std::string label=(n==sel?"> ":"  ")+v[n]+(locked?"  [LOCKED]":"");
-        txt(r,238,54+n*25,label,n==sel?C{120,220,255,255}:locked?C{150,150,155,255}:normal,true);
+        txt(r,238,52+n*23,label,n==sel?C{120,220,255,255}:locked?C{150,150,155,255}:normal,true);
     }
 
     static const std::array<const char*,SettingCount> hint={
@@ -1581,6 +1582,7 @@ void renderSettings(SDL_Renderer*r,const AppConfig&c,int sel,bool editing,const 
         "Show or hide the live input history while playing and watching replays.",
         "Synchronize presentation to the display refresh.",
         "Render cap when VSync is disabled. Enter 0 for uncapped.",
+        "Built-in soundtrack volume. 0% mutes music without disabling the audio system.",
         "Apply the locked competitive ruleset during runs.",
         "Strict 20+20 Guideline profile; overrides Tournament while ON and restores personal settings when OFF.",
         "Open seed setup, randomize, copy and paste tools.",

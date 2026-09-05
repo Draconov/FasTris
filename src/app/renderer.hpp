@@ -34,6 +34,7 @@ enum SettingsItem : int {
     SettingShowInputs,
     SettingVsync,
     SettingFpsCap,
+    SettingMusicVolume,
     SettingTournament,
     SettingGuideline,
     SettingSeedMenu,

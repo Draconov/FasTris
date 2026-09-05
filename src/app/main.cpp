@@ -1,4 +1,6 @@
 #include "app_config.hpp"
+#include "music_manager.hpp"
+#include "music_policy.hpp"
 #include "renderer.hpp"
 #include "fasttris/game.hpp"
 #include "fasttris/replay.hpp"
@@ -657,6 +659,10 @@ void printHelp() {
 
 struct AppState {
     AppConfig cfg{defaultConfig()};
+    MusicManager music;
+    MusicDirector music_director;
+    bool audio_subsystem_ready{};
+    bool music_init_attempted{};
     SDL_Window* win{};
     SDL_Renderer* ren{};
     std::vector<SDL_Gamepad*> pads;
@@ -711,8 +717,53 @@ struct AppState {
     Uint64 frame_start{};
 
     void startRun(Mode mode, Uint64 now) {
+        music_director.reset();
         run.start(seed, mode, effectiveRules(cfg, mode), now);
         screen = Screen::Game;
+    }
+
+    void ensureMusicInitialized(bool user_gesture=false) {
+        if (music.available()) return;
+#if defined(__EMSCRIPTEN__)
+        // Browser audio contexts are created/resumed from a user gesture.
+        if (!user_gesture) return;
+        if (!audio_subsystem_ready) {
+            audio_subsystem_ready = SDL_InitSubSystem(SDL_INIT_AUDIO);
+            if (!audio_subsystem_ready) {
+                std::cerr << "Audio unavailable; continuing silently: " << SDL_GetError() << "\n";
+                return;
+            }
+        }
+#else
+        (void)user_gesture;
+        if (!audio_subsystem_ready || music_init_attempted) return;
+#endif
+        music_init_attempted = true;
+        music.setVolume(cfg.music_volume);
+        if (!music.initialize())
+            std::cerr << "Music disabled: " << music.lastError() << "\n";
+    }
+
+    void updateMusic() {
+        ensureMusicInitialized(false);
+        if (!music.available()) return;
+
+        MusicTrack desired = MusicTrack::Menu;
+        bool paused = false;
+        if (screen == Screen::Game && run.game) {
+            desired = music_director.trackForGame(*run.game);
+            paused = run.paused;
+        } else if (screen == Screen::Replay && viewer.game) {
+            desired = music_director.trackForGame(*viewer.game);
+            paused = viewer.paused;
+        } else {
+            music_director.reset();
+        }
+
+        music.setVolume(cfg.music_volume);
+        music.setDesiredTrack(desired);
+        music.setPaused(paused);
+        music.update();
     }
 
     bool lastReplayExists() const {
@@ -924,7 +975,7 @@ struct AppState {
         switch (item) {
             case SettingDas: case SettingArr: case SettingSdf: case SettingDcd:
             case SettingLock: case SettingResets: case SettingNext:
-            case SettingFpsCap:
+            case SettingFpsCap: case SettingMusicVolume:
                 return true;
             default:
                 return false;
@@ -947,6 +998,7 @@ struct AppState {
             case SettingResets: settings_number_text = std::to_string(h.max_lock_resets); break;
             case SettingNext: settings_number_text = std::to_string(cfg.rules.next_count); break;
             case SettingFpsCap: settings_number_text = std::to_string(cfg.fps_cap); break;
+            case SettingMusicVolume: settings_number_text = std::to_string(cfg.music_volume); break;
             default: return;
         }
         settings_status.clear();
@@ -993,6 +1045,7 @@ struct AppState {
                 case SettingResets: ok = assignInt(0, 100, h.max_lock_resets, "0-100"); break;
                 case SettingNext: ok = assignInt(1, 8, cfg.rules.next_count, "1-8"); break;
                 case SettingFpsCap: ok = assignInt(0, 1000, cfg.fps_cap, "0-1000"); break;
+                case SettingMusicVolume: ok = assignInt(0, 100, cfg.music_volume, "0-100"); break;
                 default: break;
             }
             if (!ok) return false;
@@ -1245,6 +1298,9 @@ struct AppState {
                 cfg.fps_cap = next;
                 break;
             }
+            case SettingMusicVolume:
+                cfg.music_volume = std::clamp(cfg.music_volume + delta * 5, 0, 100);
+                break;
             case SettingTournament: cfg.rules.tournament = !cfg.rules.tournament; break;
             case SettingGuideline: cfg.rules.guideline = !cfg.rules.guideline; break;
             default: return;
@@ -1437,6 +1493,13 @@ struct AppState {
             std::cerr << "SDL_Init failed: " << SDL_GetError() << "\n";
             return false;
         }
+#if defined(__EMSCRIPTEN__)
+        audio_subsystem_ready = false; // Initialize from the first browser user gesture.
+#else
+        audio_subsystem_ready = SDL_InitSubSystem(SDL_INIT_AUDIO);
+        if (!audio_subsystem_ready)
+            std::cerr << "Audio unavailable; continuing silently: " << SDL_GetError() << "\n";
+#endif
 #if defined(__ANDROID__)
         const Uint32 android_event_type = SDL_RegisterEvents(1);
         if (android_event_type != 0)
@@ -1493,6 +1556,9 @@ struct AppState {
         SDL_SetWindowMinimumSize(win, 480, 360);
 #endif
         SDL_SetRenderVSync(ren, cfg.vsync ? 1 : 0);
+#if !defined(__EMSCRIPTEN__)
+        ensureMusicInitialized(false);
+#endif
 
         int pcount = 0;
         if (auto ids = SDL_GetGamepads(&pcount)) {
@@ -1515,6 +1581,20 @@ struct AppState {
 
     SDL_AppResult onEvent(SDL_Event& ev) {
         if (ev.type == SDL_EVENT_QUIT) return SDL_APP_SUCCESS;
+
+        if (ev.type == SDL_EVENT_WILL_ENTER_BACKGROUND || ev.type == SDL_EVENT_DID_ENTER_BACKGROUND) {
+            music.setLifecycleSuspended(true);
+            return SDL_APP_CONTINUE;
+        }
+        if (ev.type == SDL_EVENT_WILL_ENTER_FOREGROUND || ev.type == SDL_EVENT_DID_ENTER_FOREGROUND) {
+            music.setLifecycleSuspended(false);
+            return SDL_APP_CONTINUE;
+        }
+#if defined(__EMSCRIPTEN__)
+        if (ev.type == SDL_EVENT_KEY_DOWN || ev.type == SDL_EVENT_MOUSE_BUTTON_DOWN ||
+            ev.type == SDL_EVENT_FINGER_DOWN || ev.type == SDL_EVENT_GAMEPAD_BUTTON_DOWN)
+            ensureMusicInitialized(true);
+#endif
 
 #if defined(__ANDROID__)
         const Uint32 android_event_type = g_android_touch_event_type.load(std::memory_order_relaxed);
@@ -2142,6 +2222,7 @@ struct AppState {
             renderHelp(ren);
         }
 
+        updateMusic();
         if(directNumberEditing())renderNumberInputOverlay(ren,direct_number_text,direct_number_status);
 
         applyVisualShader(ren);
@@ -2160,6 +2241,7 @@ struct AppState {
 
     void shutdown() {
         if (!config_path.empty()) saveConfig(config_path, cfg);
+        music.shutdown();
         shutdownVisualShaderPipeline();
         for (auto* pad : pads) SDL_CloseGamepad(pad);
         pads.clear();

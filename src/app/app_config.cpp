@@ -350,6 +350,7 @@ void clampConfig(AppConfig&c){
     c.rules.custom_time_limit_s=std::clamp(c.rules.custom_time_limit_s,0,3600);
     c.rules.custom_start_garbage=std::clamp(c.rules.custom_start_garbage,0,12);
     c.fps_cap=std::clamp(c.fps_cap,0,1000);
+    c.music_volume=std::clamp(c.music_volume,0,100);
     c.palette=static_cast<VisualPalette>(std::clamp(static_cast<int>(c.palette),0,kVisualPaletteCount-1));
     c.texture=static_cast<VisualTexture>(std::clamp(static_cast<int>(c.texture),0,kVisualTextureCount-1));
     for(auto& slot:c.shader_slots){
@@ -749,6 +750,7 @@ bool loadConfig(const std::string&path,AppConfig&c){
             else if(k=="vsync")c.vsync=n!=0;
             else if(k=="showinputs")c.show_inputs=n!=0;
             else if(k=="fps")c.fps_cap=n;
+            else if(k=="musicvolume")c.music_volume=n;
             else if(k=="palette")c.palette=static_cast<VisualPalette>(n);
             else if(k=="palettepieces")c.palette_affects_pieces=n!=0;
             else if(k=="texture")c.texture=static_cast<VisualTexture>(n);
@@ -814,6 +816,7 @@ bool saveConfig(const std::string&path,const AppConfig&c){
      <<"\nvsync="<<c.vsync
      <<"\nshowinputs="<<c.show_inputs
      <<"\nfps="<<c.fps_cap
+     <<"\nmusicvolume="<<c.music_volume
      <<"\npalette="<<static_cast<int>(c.palette)
      <<"\npalettepieces="<<c.palette_affects_pieces
      <<"\ntexture="<<static_cast<int>(c.texture)
@@ -877,6 +880,7 @@ void resetSettings(AppConfig& c){
     c.vsync=d.vsync;
     c.show_inputs=d.show_inputs;
     c.fps_cap=d.fps_cap;
+    c.music_volume=d.music_volume;
     resetGraphics(c);
 }
 
