@@ -19,7 +19,7 @@ constexpr int kMixChannels = 2;
 constexpr int kMixFrameBytes = static_cast<int>(sizeof(float)) * kMixChannels;
 constexpr int kDecodeFrames = 2'048;
 constexpr int kMixFrames = 1'024;
-constexpr int kQueueTargetFrames = 4'096; // ~250 ms; resilient without adding noticeable control latency.
+constexpr int kQueueTargetFrames = 4'096; // ~85 ms at 48 kHz; enough to start/resume without an empty device.
 
 SDL_AudioSpec mixSpec() {
     SDL_AudioSpec spec{};
@@ -212,6 +212,26 @@ struct MusicManager::Impl {
         }
         return true;
     }
+
+    bool primeQueue() {
+        if (!output) return false;
+        const int target_bytes = kQueueTargetFrames * kMixFrameBytes;
+        int queued = SDL_GetAudioStreamQueued(output);
+        if (queued < 0) {
+            error = std::string("SDL_GetAudioStreamQueued failed: ") + SDL_GetError();
+            return false;
+        }
+        int guard = 0;
+        while (queued < target_bytes && guard++ < 16) {
+            if (!renderChunk(kMixFrames)) return false;
+            queued = SDL_GetAudioStreamQueued(output);
+            if (queued < 0) {
+                error = std::string("SDL_GetAudioStreamQueued failed: ") + SDL_GetError();
+                return false;
+            }
+        }
+        return queued >= target_bytes;
+    }
 };
 
 MusicManager::MusicManager() : impl_(std::make_unique<Impl>()) {}
@@ -233,6 +253,14 @@ bool MusicManager::initialize() {
         return false;
     }
     impl_->logical_current = impl_->desired;
+    // SDL opens the device paused. Fill its queue before the first resume so
+    // Android never starts a low-level audio device with an empty stream.
+    if (!impl_->primeQueue()) {
+        impl_->current.reset();
+        SDL_DestroyAudioStream(impl_->output);
+        impl_->output = nullptr;
+        return false;
+    }
     impl_->syncDevicePause();
     return true;
 }
@@ -266,21 +294,7 @@ void MusicManager::update() {
     impl_->syncDevicePause();
     if (impl_->paused || impl_->lifecycle_suspended) return;
 
-    const int target_bytes = kQueueTargetFrames * kMixFrameBytes;
-    int queued = SDL_GetAudioStreamQueued(impl_->output);
-    if (queued < 0) {
-        impl_->error = std::string("SDL_GetAudioStreamQueued failed: ") + SDL_GetError();
-        return;
-    }
-    int guard = 0;
-    while (queued < target_bytes && guard++ < 16) {
-        if (!impl_->renderChunk(kMixFrames)) return;
-        queued = SDL_GetAudioStreamQueued(impl_->output);
-        if (queued < 0) {
-            impl_->error = std::string("SDL_GetAudioStreamQueued failed: ") + SDL_GetError();
-            return;
-        }
-    }
+    impl_->primeQueue();
 }
 
 } // namespace fasttris::app

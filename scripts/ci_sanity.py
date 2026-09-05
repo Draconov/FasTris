@@ -168,6 +168,20 @@ if "kMusicIntenseOnPressure" not in music_policy_cpp or "pending_garbage_lines" 
 if "Music slot '${slot}' requires exactly one source file" not in (ROOT / "CMakeLists.txt").read_text(encoding="utf-8"):
     fail("CMake must reject missing/duplicate menu/gameplay/intense music source formats")
 
+# Android music startup must never be part of the first-frame critical path.
+for marker in [
+    "bool first_frame_presented{};",
+    "bool lifecycle_suspended{};",
+    'SDL_SetHint(SDL_HINT_AUDIO_DRIVER, "openslES")',
+    'SDL_SetHint(SDL_HINT_ANDROID_LOW_LATENCY_AUDIO, "0")',
+    "if (!first_frame_presented || lifecycle_suspended) return;",
+    "first_frame_presented = true;",
+]:
+    if marker not in app_main_cpp:
+        fail(f"Android-safe delayed music startup marker missing from main.cpp: {marker}")
+if "primeQueue" not in music_manager_cpp or "if (!impl_->primeQueue())" not in music_manager_cpp:
+    fail("MusicManager must prebuffer PCM before resuming the SDL audio device")
+
 if errors:
     for error in errors:
         print(f"ERROR: {error}", file=sys.stderr)

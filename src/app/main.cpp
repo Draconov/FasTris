@@ -663,6 +663,8 @@ struct AppState {
     MusicDirector music_director;
     bool audio_subsystem_ready{};
     bool music_init_attempted{};
+    bool first_frame_presented{};
+    bool lifecycle_suspended{};
     SDL_Window* win{};
     SDL_Renderer* ren{};
     std::vector<SDL_Gamepad*> pads;
@@ -723,22 +725,29 @@ struct AppState {
     }
 
     void ensureMusicInitialized(bool user_gesture=false) {
-        if (music.available()) return;
+        if (music.available() || music_init_attempted) return;
 #if defined(__EMSCRIPTEN__)
         // Browser audio contexts are created/resumed from a user gesture.
         if (!user_gesture) return;
+#else
+        (void)user_gesture;
+#endif
+#if defined(__ANDROID__)
+        // Keep Android audio completely outside the launch-critical first frame.
+        if (!first_frame_presented || lifecycle_suspended) return;
+#endif
+        music_init_attempted = true;
         if (!audio_subsystem_ready) {
             audio_subsystem_ready = SDL_InitSubSystem(SDL_INIT_AUDIO);
             if (!audio_subsystem_ready) {
                 std::cerr << "Audio unavailable; continuing silently: " << SDL_GetError() << "\n";
                 return;
             }
-        }
-#else
-        (void)user_gesture;
-        if (!audio_subsystem_ready || music_init_attempted) return;
+#if defined(__ANDROID__)
+            if (const char* driver = SDL_GetCurrentAudioDriver())
+                std::cerr << "Android audio driver: " << driver << "\n";
 #endif
-        music_init_attempted = true;
+        }
         music.setVolume(cfg.music_volume);
         if (!music.initialize())
             std::cerr << "Music disabled: " << music.lastError() << "\n";
@@ -1488,13 +1497,23 @@ struct AppState {
 
 #if defined(__ANDROID__)
         SDL_SetHint(SDL_HINT_ORIENTATIONS, "LandscapeLeft LandscapeRight Portrait PortraitUpsideDown");
+        // These audio hints must be installed before SDL initialization. Audio
+        // itself is deliberately initialized only after the first frame. Force
+        // the mature OpenSL ES backend for now: if it cannot initialize, music
+        // fails closed (silent) instead of risking an AAudio native startup crash.
+        // Disabling the low-latency path also avoids
+        // fragile device-specific fast-track initialization during startup.
+        SDL_SetHint(SDL_HINT_AUDIO_DRIVER, "openslES");
+        SDL_SetHint(SDL_HINT_ANDROID_LOW_LATENCY_AUDIO, "0");
 #endif
         if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_GAMEPAD)) {
             std::cerr << "SDL_Init failed: " << SDL_GetError() << "\n";
             return false;
         }
-#if defined(__EMSCRIPTEN__)
-        audio_subsystem_ready = false; // Initialize from the first browser user gesture.
+#if defined(__EMSCRIPTEN__) || defined(__ANDROID__)
+        // Web requires a user gesture; Android deliberately waits until after
+        // the first successful frame so audio can never prevent app startup.
+        audio_subsystem_ready = false;
 #else
         audio_subsystem_ready = SDL_InitSubSystem(SDL_INIT_AUDIO);
         if (!audio_subsystem_ready)
@@ -1556,7 +1575,7 @@ struct AppState {
         SDL_SetWindowMinimumSize(win, 480, 360);
 #endif
         SDL_SetRenderVSync(ren, cfg.vsync ? 1 : 0);
-#if !defined(__EMSCRIPTEN__)
+#if !defined(__EMSCRIPTEN__) && !defined(__ANDROID__)
         ensureMusicInitialized(false);
 #endif
 
@@ -1583,10 +1602,12 @@ struct AppState {
         if (ev.type == SDL_EVENT_QUIT) return SDL_APP_SUCCESS;
 
         if (ev.type == SDL_EVENT_WILL_ENTER_BACKGROUND || ev.type == SDL_EVENT_DID_ENTER_BACKGROUND) {
+            lifecycle_suspended = true;
             music.setLifecycleSuspended(true);
             return SDL_APP_CONTINUE;
         }
         if (ev.type == SDL_EVENT_WILL_ENTER_FOREGROUND || ev.type == SDL_EVENT_DID_ENTER_FOREGROUND) {
+            lifecycle_suspended = false;
             music.setLifecycleSuspended(false);
             return SDL_APP_CONTINUE;
         }
@@ -2227,6 +2248,7 @@ struct AppState {
 
         applyVisualShader(ren);
         SDL_RenderPresent(ren);
+        first_frame_presented = true;
 
 #ifndef __EMSCRIPTEN__
         if (!cfg.vsync && cfg.fps_cap > 0) {
