@@ -3,6 +3,7 @@
 #include "music_policy.hpp"
 #include "music_startup.hpp"
 #include "renderer.hpp"
+#include "window_icon.hpp"
 #include "fasttris/game.hpp"
 #include "fasttris/replay.hpp"
 #include "fasttris/rules.hpp"
@@ -1571,6 +1572,7 @@ struct AppState {
         SDL_SetHint(SDL_HINT_AUDIO_DRIVER, "openslES");
         SDL_SetHint(SDL_HINT_ANDROID_LOW_LATENCY_AUDIO, "0");
 #endif
+        SDL_SetAppMetadata("FasTris", kVersion, "com.draconov.fastris");
         if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_GAMEPAD)) {
             std::cerr << "SDL_Init failed: " << SDL_GetError() << "\n";
             return false;
@@ -1620,6 +1622,7 @@ struct AppState {
             std::cerr << "SDL_CreateWindow failed: " << SDL_GetError() << "\n";
             return false;
         }
+        setFasTrisWindowIcon(win);
 
         ren = SDL_CreateRenderer(win, nullptr);
         if (!ren) {

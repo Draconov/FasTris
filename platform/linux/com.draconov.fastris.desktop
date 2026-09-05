@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=FasTris
+Comment=Deterministic competitive block engine
+Exec=FasTris
+Icon=com.draconov.fastris
+Terminal=false
+Categories=Game;BlocksGame;
+Keywords=Tetris;Block;Puzzle;Game;
+StartupNotify=true
+StartupWMClass=FasTris

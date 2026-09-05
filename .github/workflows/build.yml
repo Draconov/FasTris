@@ -79,7 +79,13 @@ jobs:
       - name: Build
         run: cmake --build build --parallel
       - name: Verify outputs
-        run: test -x build/FasTris && test -x build/fastris_verify && test -x build/fastris_sequence && test -x build/fastris_bench
+        run: |
+          test -x build/FasTris
+          test -x build/fastris_verify
+          test -x build/fastris_sequence
+          test -x build/fastris_bench
+          test -s platform/linux/com.draconov.fastris.desktop
+          test -s platform/linux/com.draconov.fastris.png
 
   desktop-macos:
     needs: sanity
@@ -96,6 +102,8 @@ jobs:
           test -d build/FasTris.app
           BIN="build/FasTris.app/Contents/MacOS/FasTris"
           test -x "$BIN"
+          test -s "build/FasTris.app/Contents/Resources/FasTris.icns"
+          /usr/libexec/PlistBuddy -c 'Print :CFBundleIconFile' build/FasTris.app/Contents/Info.plist | grep -Fxq 'FasTris.icns'
           ARCHS="$(lipo -archs "$BIN")"
           echo "Architectures: $ARCHS"
           echo "$ARCHS" | tr ' ' '\n' | grep -Fxq x86_64
@@ -118,7 +126,16 @@ jobs:
       - name: Build
         run: cmake --build build-web --parallel
       - name: Verify browser bundle
-        run: test -s build-web/index.html && test -s build-web/index.js && test -s build-web/index.wasm
+        run: |
+          test -s build-web/index.html
+          test -s build-web/index.js
+          test -s build-web/index.wasm
+          test -s build-web/favicon.ico
+          test -s build-web/favicon.png
+          test -s build-web/apple-touch-icon.png
+          test -s build-web/icon-192.png
+          test -s build-web/icon-512.png
+          test -s build-web/manifest.webmanifest
 
   android:
     needs: sanity

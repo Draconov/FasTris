@@ -156,8 +156,26 @@ if(FASTTRIS_BUILD_APP)
         src/app/app_config.cpp
         src/app/renderer.cpp
         src/app/music_policy.cpp
+        src/app/window_icon.cpp
         "${FASTTRIS_GENERATED_MUSIC_CPP}"
     )
+
+    if(WIN32 AND NOT ANDROID)
+        enable_language(RC)
+        set(FASTTRIS_WINDOWS_ICON "${CMAKE_CURRENT_SOURCE_DIR}/assets/icon/FasTris.ico")
+        configure_file(
+            "${CMAKE_CURRENT_SOURCE_DIR}/platform/windows/FasTris.rc.in"
+            "${CMAKE_CURRENT_BINARY_DIR}/generated/FasTris.rc"
+            @ONLY
+        )
+        list(APPEND FASTTRIS_APP_SOURCES "${CMAKE_CURRENT_BINARY_DIR}/generated/FasTris.rc")
+    endif()
+
+    if(APPLE AND NOT IOS)
+        set(FASTTRIS_MACOS_ICON "${CMAKE_CURRENT_SOURCE_DIR}/assets/icon/FasTris.icns")
+        set_source_files_properties("${FASTTRIS_MACOS_ICON}" PROPERTIES MACOSX_PACKAGE_LOCATION "Resources")
+        list(APPEND FASTTRIS_APP_SOURCES "${FASTTRIS_MACOS_ICON}")
+    endif()
     if(EMSCRIPTEN)
         # Browser builds use Web Audio directly. Keeping SDL audio/codec work
         # out of the browser input loop prevents music from ever starving SDL
@@ -183,6 +201,7 @@ if(FASTTRIS_BUILD_APP)
             MACOSX_BUNDLE_GUI_IDENTIFIER "com.draconov.fastris"
             MACOSX_BUNDLE_BUNDLE_VERSION "${FASTTRIS_VERSION}"
             MACOSX_BUNDLE_SHORT_VERSION_STRING "${FASTTRIS_VERSION}"
+            MACOSX_BUNDLE_ICON_FILE "FasTris.icns"
         )
     else()
         add_executable(fasttris ${FASTTRIS_APP_SOURCES})
@@ -215,6 +234,27 @@ if(FASTTRIS_BUILD_APP)
             "SHELL:-sEXPORTED_RUNTIME_METHODS=ccall"
             "SHELL:-sEXPORTED_FUNCTIONS=_main,_malloc,_free"
         )
+        foreach(_web_icon IN ITEMS
+            favicon.ico
+            favicon.png
+            apple-touch-icon.png
+            icon-192.png
+            icon-512.png
+            manifest.webmanifest)
+            add_custom_command(TARGET fasttris POST_BUILD
+                COMMAND "${CMAKE_COMMAND}" -E copy_if_different
+                        "${CMAKE_CURRENT_SOURCE_DIR}/platform/web/${_web_icon}"
+                        "${CMAKE_CURRENT_BINARY_DIR}/${_web_icon}"
+                VERBATIM)
+        endforeach()
+    endif()
+
+    if(UNIX AND NOT APPLE AND NOT ANDROID AND NOT EMSCRIPTEN)
+        install(TARGETS fasttris RUNTIME DESTINATION bin)
+        install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/platform/linux/com.draconov.fastris.desktop"
+                DESTINATION share/applications)
+        install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/platform/linux/com.draconov.fastris.png"
+                DESTINATION share/icons/hicolor/512x512/apps)
     endif()
 endif()
 

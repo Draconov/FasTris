@@ -116,6 +116,9 @@ jobs:
             test -x "build/$file"
             cp "build/$file" "$stage/"
           done
+          mkdir -p "$stage/share/applications" "$stage/share/icons/hicolor/512x512/apps"
+          cp platform/linux/com.draconov.fastris.desktop "$stage/share/applications/"
+          cp platform/linux/com.draconov.fastris.png "$stage/share/icons/hicolor/512x512/apps/"
           cp README.md VERSION "$stage/"
           tar -C dist -czf "dist/FasTris-Linux.tar.gz" "FasTris-v${version}-linux-x86_64"
       - uses: actions/upload-artifact@v7
@@ -139,6 +142,8 @@ jobs:
           set -euo pipefail
           BIN="build/FasTris.app/Contents/MacOS/FasTris"
           test -x "$BIN"
+          test -s "build/FasTris.app/Contents/Resources/FasTris.icns"
+          /usr/libexec/PlistBuddy -c 'Print :CFBundleIconFile' build/FasTris.app/Contents/Info.plist | grep -Fxq 'FasTris.icns'
           ARCHS="$(lipo -archs "$BIN")"
           echo "Architectures: $ARCHS"
           echo "$ARCHS" | tr ' ' '\n' | grep -Fxq x86_64
@@ -182,10 +187,19 @@ jobs:
           test -s build-web/index.html
           test -s build-web/index.js
           test -s build-web/index.wasm
+          test -s build-web/favicon.ico
+          test -s build-web/favicon.png
+          test -s build-web/apple-touch-icon.png
+          test -s build-web/icon-192.png
+          test -s build-web/icon-512.png
+          test -s build-web/manifest.webmanifest
           version="${{ needs.version.outputs.version }}"
           stage="dist/FasTris-v${version}-web"
           mkdir -p "$stage"
-          find build-web -maxdepth 1 -type f \( -name 'index.*' -o -name '*.data' -o -name '*.worker.js' \) -exec cp {} "$stage/" \;
+          find build-web -maxdepth 1 -type f \
+            \( -name 'index.*' -o -name '*.data' -o -name '*.worker.js' -o -name 'favicon.*' \
+               -o -name 'apple-touch-icon.png' -o -name 'icon-192.png' -o -name 'icon-512.png' \
+               -o -name 'manifest.webmanifest' \) -exec cp {} "$stage/" \;
           cp VERSION "$stage/"
           (cd "$stage" && zip -9 -r "../FasTris-Web.zip" .)
       - uses: actions/upload-artifact@v7

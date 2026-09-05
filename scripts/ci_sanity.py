@@ -234,6 +234,84 @@ if "#if defined(__EMSCRIPTEN__)\n        ensureMusicInitialized(false);" not in 
 if "fatal_error" not in music_manager_cpp or "SDL_DestroyAudioStream(impl_->output)" not in music_manager_cpp:
     fail("native MusicManager must tear down only music after fatal runtime audio failure")
 
+
+# Cross-platform application icon regression checks.
+icon_source = ROOT / "assets/icon/icon.png"
+if not icon_source.is_file():
+    fail("missing canonical FasTris icon source: assets/icon/icon.png")
+
+icon_files = [
+    "assets/icon/FasTris.ico",
+    "assets/icon/FasTris.icns",
+    "src/app/app_icon_data.hpp",
+    "src/app/window_icon.hpp",
+    "src/app/window_icon.cpp",
+    "platform/windows/FasTris.rc.in",
+    "platform/web/favicon.ico",
+    "platform/web/favicon.png",
+    "platform/web/apple-touch-icon.png",
+    "platform/web/icon-192.png",
+    "platform/web/icon-512.png",
+    "platform/web/manifest.webmanifest",
+    "platform/linux/com.draconov.fastris.desktop",
+    "platform/linux/com.draconov.fastris.png",
+]
+for rel in icon_files:
+    if not (ROOT / rel).is_file():
+        fail(f"missing cross-platform icon asset/integration file: {rel}")
+
+if (ROOT / "assets/icon/FasTris.ico").is_file():
+    ico = (ROOT / "assets/icon/FasTris.ico").read_bytes()
+    if len(ico) < 6 or ico[:4] != b"\x00\x00\x01\x00":
+        fail("Windows FasTris.ico is not a valid ICO container")
+if (ROOT / "assets/icon/FasTris.icns").is_file():
+    icns = (ROOT / "assets/icon/FasTris.icns").read_bytes()
+    if len(icns) < 8 or icns[:4] != b"icns":
+        fail("macOS FasTris.icns is not a valid ICNS container")
+
+web_shell = (ROOT / "platform/web/shell.html").read_text(encoding="utf-8")
+for marker in [
+    'rel="icon" href="favicon.png"',
+    'rel="shortcut icon" href="favicon.ico"',
+    'rel="apple-touch-icon" href="apple-touch-icon.png"',
+    'rel="manifest" href="manifest.webmanifest"',
+]:
+    if marker not in web_shell:
+        fail(f"web shell is missing icon metadata: {marker}")
+
+for marker in [
+    "enable_language(RC)",
+    "platform/windows/FasTris.rc.in",
+    "MACOSX_BUNDLE_ICON_FILE \"FasTris.icns\"",
+    "${CMAKE_CURRENT_SOURCE_DIR}/platform/web/${_web_icon}",
+    "platform/linux/com.draconov.fastris.desktop",
+]:
+    if marker not in cmake_text:
+        fail(f"CMake icon integration missing marker: {marker}")
+
+if '#include "window_icon.hpp"' not in app_main_cpp or "setFasTrisWindowIcon(win);" not in app_main_cpp:
+    fail("desktop SDL window must apply the FasTris runtime icon after window creation")
+
+linux_desktop_path = ROOT / "platform/linux/com.draconov.fastris.desktop"
+if linux_desktop_path.is_file():
+    linux_desktop = linux_desktop_path.read_text(encoding="utf-8")
+    for marker in ["Name=FasTris", "Exec=FasTris", "Icon=com.draconov.fastris", "Categories=Game;BlocksGame;"]:
+        if marker not in linux_desktop:
+            fail(f"Linux desktop entry missing marker: {marker}")
+
+manifest_text = (ROOT / "platform/android/app/src/main/AndroidManifest.xml").read_text(encoding="utf-8")
+for marker in ['android:icon="@mipmap/ic_launcher"', 'android:roundIcon="@mipmap/ic_launcher_round"']:
+    if marker not in manifest_text:
+        fail(f"Android launcher icon wiring regressed: {marker}")
+
+for marker in ["favicon.png", "manifest.webmanifest", "apple-touch-icon.png", "icon-192.png", "icon-512.png"]:
+    if marker not in release_workflow:
+        fail(f"release.yml must package web icon asset: {marker}")
+if "com.draconov.fastris.desktop" not in release_workflow or "com.draconov.fastris.png" not in release_workflow:
+    fail("release.yml must package Linux desktop icon integration")
+if "build-web/favicon.png" not in pages_workflow or "build-web/manifest.webmanifest" not in pages_workflow:
+    fail("pages.yml must verify generated Web icon/PWA files")
+
 if errors:
     for error in errors:
         print(f"ERROR: {error}", file=sys.stderr)
