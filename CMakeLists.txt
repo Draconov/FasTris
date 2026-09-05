@@ -59,6 +59,10 @@ if(FASTTRIS_BUILD_APP)
     include(FetchContent)
     find_package(Python3 COMPONENTS Interpreter REQUIRED)
 
+    # Android's Gradle build intentionally uses CMake 3.22.1 and the project
+    # supports CMake 3.20+. DOWNLOAD_EXTRACT_TIMESTAMP was added in 3.24, so
+    # only pass it when the running CMake understands the option. All remote
+    # archives below are pinned, making the pre-3.24 timestamp behavior safe.
     set(FASTTRIS_FETCH_TIMESTAMP_ARGS)
     if(CMAKE_VERSION VERSION_GREATER_EQUAL "3.24")
         list(APPEND FASTTRIS_FETCH_TIMESTAMP_ARGS DOWNLOAD_EXTRACT_TIMESTAMP TRUE)
@@ -233,6 +237,10 @@ if(FASTTRIS_BUILD_TESTS AND NOT ANDROID AND NOT EMSCRIPTEN)
     target_include_directories(fasttris_music_policy_tests PRIVATE src/app)
     target_link_libraries(fasttris_music_policy_tests PRIVATE fasttris_core)
     add_test(NAME fasttris_music_policy COMMAND fasttris_music_policy_tests)
+
+    add_executable(fasttris_music_startup_tests tests/music_startup_tests.cpp)
+    target_include_directories(fasttris_music_startup_tests PRIVATE src/app)
+    add_test(NAME fasttris_music_startup COMMAND fasttris_music_startup_tests)
 
     find_package(Python3 COMPONENTS Interpreter QUIET)
     if(Python3_Interpreter_FOUND)

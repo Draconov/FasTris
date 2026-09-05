@@ -174,13 +174,31 @@ for marker in [
     "bool lifecycle_suspended{};",
     'SDL_SetHint(SDL_HINT_AUDIO_DRIVER, "openslES")',
     'SDL_SetHint(SDL_HINT_ANDROID_LOW_LATENCY_AUDIO, "0")',
-    "if (!first_frame_presented || lifecycle_suspended) return;",
+    "music_startup.setLifecycleSuspended(lifecycle_suspended);",
+    "if (!first_frame_presented) return;",
     "first_frame_presented = true;",
 ]:
     if marker not in app_main_cpp:
         fail(f"Android-safe delayed music startup marker missing from main.cpp: {marker}")
 if "primeQueue" not in music_manager_cpp or "if (!impl_->primeQueue())" not in music_manager_cpp:
     fail("MusicManager must prebuffer PCM before resuming the SDL audio device")
+
+# Android audio-device creation/decoding must not run synchronously inside the
+# SDL main/event loop. SDL_InitSubSystem stays on the main thread, while the
+# expensive MusicManager initialization runs on a worker and is joined only
+# after it reports completion.
+for marker in [
+    "MusicStartupState music_startup;",
+    "std::thread music_init_thread;",
+    "music_init_done.store(true",
+    "music.initialize()",
+    "music_init_thread = std::thread",
+    "if (!music_startup.ready()) return;",
+]:
+    if marker not in app_main_cpp:
+        fail(f"Android non-blocking music bootstrap marker missing from main.cpp: {marker}")
+if "updateMusic();\n        if(directNumberEditing())" in app_main_cpp:
+    fail("updateMusic must run after SDL_RenderPresent so audio bootstrap cannot delay visible input feedback")
 
 if errors:
     for error in errors:

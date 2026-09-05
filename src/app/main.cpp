@@ -1,6 +1,7 @@
 #include "app_config.hpp"
 #include "music_manager.hpp"
 #include "music_policy.hpp"
+#include "music_startup.hpp"
 #include "renderer.hpp"
 #include "fasttris/game.hpp"
 #include "fasttris/replay.hpp"
@@ -30,6 +31,7 @@
 #include <span>
 #include <string>
 #include <system_error>
+#include <thread>
 #include <utility>
 #include <vector>
 #if defined(__EMSCRIPTEN__)
@@ -665,6 +667,13 @@ struct AppState {
     bool music_init_attempted{};
     bool first_frame_presented{};
     bool lifecycle_suspended{};
+#if defined(__ANDROID__)
+    MusicStartupState music_startup;
+    std::thread music_init_thread;
+    std::atomic<bool> music_init_done{false};
+    bool music_init_result{};
+    std::string music_init_error;
+#endif
     SDL_Window* win{};
     SDL_Renderer* ren{};
     std::vector<SDL_Gamepad*> pads;
@@ -725,16 +734,58 @@ struct AppState {
     }
 
     void ensureMusicInitialized(bool user_gesture=false) {
+#if defined(__ANDROID__)
+        (void)user_gesture;
+
+        if (music_startup.starting() && music_init_done.load(std::memory_order_acquire)) {
+            if (music_init_thread.joinable()) music_init_thread.join();
+            music_startup.finish(music_init_result);
+            if (!music_init_result) {
+                std::cerr << "Music disabled: " << music_init_error << "\n";
+            } else {
+                music.setLifecycleSuspended(lifecycle_suspended);
+            }
+        }
+
+        if (music_startup.ready() || music_startup.failed() || music_startup.starting()) return;
+        music_startup.setLifecycleSuspended(lifecycle_suspended);
+        if (!first_frame_presented) return;
+        music_startup.markFirstFramePresented();
+        if (!music_startup.claimStart()) return;
+
+        music_init_attempted = true;
+        if (!audio_subsystem_ready) {
+            // SDL subsystem initialization is explicitly main-thread-only. Keep
+            // this tiny step here, but move device opening, decoding and queue
+            // priming off the SDL event/render loop.
+            audio_subsystem_ready = SDL_InitSubSystem(SDL_INIT_AUDIO);
+            if (!audio_subsystem_ready) {
+                music_init_error = std::string("Audio unavailable; continuing silently: ") + SDL_GetError();
+                music_startup.finish(false);
+                std::cerr << music_init_error << "\n";
+                return;
+            }
+            if (const char* driver = SDL_GetCurrentAudioDriver())
+                std::cerr << "Android audio driver: " << driver << "\n";
+        }
+
+        music.setVolume(cfg.music_volume);
+        music_init_done.store(false, std::memory_order_relaxed);
+        music_init_result = false;
+        music_init_error.clear();
+        music_init_thread = std::thread([this] {
+            const bool ok = music.initialize();
+            music_init_result = ok;
+            if (!ok) music_init_error = music.lastError();
+            music_init_done.store(true, std::memory_order_release);
+        });
+#else
         if (music.available() || music_init_attempted) return;
 #if defined(__EMSCRIPTEN__)
         // Browser audio contexts are created/resumed from a user gesture.
         if (!user_gesture) return;
 #else
         (void)user_gesture;
-#endif
-#if defined(__ANDROID__)
-        // Keep Android audio completely outside the launch-critical first frame.
-        if (!first_frame_presented || lifecycle_suspended) return;
 #endif
         music_init_attempted = true;
         if (!audio_subsystem_ready) {
@@ -743,18 +794,24 @@ struct AppState {
                 std::cerr << "Audio unavailable; continuing silently: " << SDL_GetError() << "\n";
                 return;
             }
-#if defined(__ANDROID__)
-            if (const char* driver = SDL_GetCurrentAudioDriver())
-                std::cerr << "Android audio driver: " << driver << "\n";
-#endif
         }
         music.setVolume(cfg.music_volume);
         if (!music.initialize())
             std::cerr << "Music disabled: " << music.lastError() << "\n";
+#endif
+    }
+
+    void finishAndroidMusicInitialization() {
+#if defined(__ANDROID__)
+        ensureMusicInitialized(false);
+#endif
     }
 
     void updateMusic() {
         ensureMusicInitialized(false);
+#if defined(__ANDROID__)
+        if (!music_startup.ready()) return;
+#endif
         if (!music.available()) return;
 
         MusicTrack desired = MusicTrack::Menu;
@@ -1603,12 +1660,22 @@ struct AppState {
 
         if (ev.type == SDL_EVENT_WILL_ENTER_BACKGROUND || ev.type == SDL_EVENT_DID_ENTER_BACKGROUND) {
             lifecycle_suspended = true;
+#if defined(__ANDROID__)
+            music_startup.setLifecycleSuspended(true);
+            if (music_startup.ready()) music.setLifecycleSuspended(true);
+#else
             music.setLifecycleSuspended(true);
+#endif
             return SDL_APP_CONTINUE;
         }
         if (ev.type == SDL_EVENT_WILL_ENTER_FOREGROUND || ev.type == SDL_EVENT_DID_ENTER_FOREGROUND) {
             lifecycle_suspended = false;
+#if defined(__ANDROID__)
+            music_startup.setLifecycleSuspended(false);
+            if (music_startup.ready()) music.setLifecycleSuspended(false);
+#else
             music.setLifecycleSuspended(false);
+#endif
             return SDL_APP_CONTINUE;
         }
 #if defined(__EMSCRIPTEN__)
@@ -2243,12 +2310,15 @@ struct AppState {
             renderHelp(ren);
         }
 
-        updateMusic();
         if(directNumberEditing())renderNumberInputOverlay(ren,direct_number_text,direct_number_status);
 
         applyVisualShader(ren);
         SDL_RenderPresent(ren);
         first_frame_presented = true;
+#if defined(__ANDROID__)
+        music_startup.markFirstFramePresented();
+#endif
+        updateMusic();
 
 #ifndef __EMSCRIPTEN__
         if (!cfg.vsync && cfg.fps_cap > 0) {
@@ -2263,6 +2333,9 @@ struct AppState {
 
     void shutdown() {
         if (!config_path.empty()) saveConfig(config_path, cfg);
+#if defined(__ANDROID__)
+        if (music_init_thread.joinable()) music_init_thread.join();
+#endif
         music.shutdown();
         shutdownVisualShaderPipeline();
         for (auto* pad : pads) SDL_CloseGamepad(pad);
